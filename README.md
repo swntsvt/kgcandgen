@@ -6,6 +6,45 @@ Knowledge Graph Candidate Generation experiments for evaluating lexical retrieva
 
 Use Python 3.12.
 
+Create and activate a virtual environment:
+
+```bash
+python3.12 -m venv venv
+source venv/bin/activate
+```
+
+Install dependencies:
+
 ```bash
 python3.12 -m pip install -r requirements.txt
+```
+
+## Project Structure
+
+```text
+kgcandgen/
+├── config/     # Dataset configuration templates and local config
+├── src/        # Source code
+├── tests/      # Unit tests
+├── logs/       # Experiment log files
+├── results/    # Experiment outputs
+└── data/       # Local datasets (ignored in git)
+```
+
+## Dataset Configuration
+
+Create your local dataset config from the example template:
+
+```bash
+cp config/datasets.example.yaml config/datasets.yaml
+```
+
+Then edit `config/datasets.yaml` with your local RDF and alignment file paths.
+
+## Testing
+
+Run tests with explicit discovery:
+
+```bash
+./venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
