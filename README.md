@@ -60,3 +60,22 @@ Run tests with explicit discovery:
 ```bash
 ./venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+## Alignment RDF Parsing Notes
+
+During validation on `biodiv/2018/flopo-pto/reference.rdf`, we identified a malformed IRI:
+
+- `rdf:resource="PATO_0000103"` (not an absolute IRI)
+
+This can cause strict RDF/XML parsing to fail with an error like:
+
+- `No scheme found in an absolute IRI`
+
+Fixes applied in `alignment_parser`:
+
+1. Strict-then-lenient parse fallback for RDF/XML.
+2. Tolerant predicate matching for OAEI namespace variants (with and without `#`).
+3. Validation that mapped entities must be absolute HTTP(S) IRIs.
+4. Malformed cells are skipped instead of aborting the full parse.
+
+Result: real dataset parsing now succeeds and returns non-zero mappings for `flopo-pto`.
