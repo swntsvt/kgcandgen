@@ -2,9 +2,9 @@
 # Copy this file to config/datasets.yaml and set real paths.
 
 datasets:
-  - name: example_dataset
-    source_graph: /path/to/source.rdf
-    target_graph: /path/to/target.rdf
-    reference_alignment: /path/to/reference_alignment.rdf
-    entity_type: class
-    language: en
+  conference_v1:
+    track: conference
+    version: "1"
+    source_rdf: /Users/.../source.rdf
+    target_rdf: /Users/.../target.rdf
+    alignment_rdf: /Users/.../alignment.rdf

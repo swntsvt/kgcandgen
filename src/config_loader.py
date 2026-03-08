@@ -14,7 +14,7 @@ class DatasetConfig:
 
     name: str
     track: str
-    version: int
+    version: str
     source_rdf: Path
     target_rdf: Path
     alignment_rdf: Path
@@ -67,7 +67,7 @@ def load_datasets_config(config_path: str | Path = "config/datasets.yaml") -> di
         loaded[dataset_name] = DatasetConfig(
             name=dataset_name,
             track=str(raw_config["track"]),
-            version=int(raw_config["version"]),
+            version=str(raw_config["version"]),
             source_rdf=source_rdf,
             target_rdf=target_rdf,
             alignment_rdf=alignment_rdf,

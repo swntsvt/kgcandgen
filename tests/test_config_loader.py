@@ -22,7 +22,7 @@ class ConfigLoaderTests(unittest.TestCase):
 datasets:
   conference_v1:
     track: conference
-    version: 1
+    version: "1"
     source_rdf: {source}
     target_rdf: {target}
     alignment_rdf: {alignment}
@@ -34,7 +34,7 @@ datasets:
             datasets = load_datasets_config(config_path)
             self.assertIn("conference_v1", datasets)
             self.assertIsInstance(datasets["conference_v1"], DatasetConfig)
-            self.assertEqual(datasets["conference_v1"].version, 1)
+            self.assertEqual(datasets["conference_v1"].version, "1")
 
             conf = get_dataset_config("conference_v1", config_path)
             self.assertEqual(conf.track, "conference")
@@ -62,7 +62,7 @@ datasets:
 datasets:
   conference_v1:
     track: conference
-    version: 1
+    version: "1"
     source_rdf: {tmp / "missing_source.rdf"}
     target_rdf: {target}
     alignment_rdf: {alignment}

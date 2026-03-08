@@ -41,6 +41,18 @@ cp config/datasets.example.yaml config/datasets.yaml
 
 Then edit `config/datasets.yaml` with your local RDF and alignment file paths.
 
+Expected schema:
+
+```yaml
+datasets:
+  <dataset_name>:
+    track: <track_name>
+    version: "<track_or_version_string>"
+    source_rdf: /absolute/path/to/source.rdf
+    target_rdf: /absolute/path/to/target.rdf
+    alignment_rdf: /absolute/path/to/alignment.rdf
+```
+
 ## Testing
 
 Run tests with explicit discovery:
