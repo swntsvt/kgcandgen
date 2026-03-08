@@ -1,0 +1,11 @@
+rdflib
+pyoxigraph
+nltk
+scikit-learn
+bm25s
+numpy
+pandas
+tqdm
+pyyaml
+matplotlib
+seaborn
