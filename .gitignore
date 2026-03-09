@@ -3,6 +3,7 @@ __pycache__/
 venv/
 logs/*.log
 results/
+results/result_*.csv
 data/
 config/datasets.yaml
 .ipynb_checkpoints/

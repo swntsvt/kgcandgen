@@ -264,7 +264,7 @@ experiments across configured datasets and hyperparameter grids for both TF-IDF 
 
 Public API:
 
-- `run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[dict]`
+- `run_experiments(config_path: str | Path = "config/datasets.yaml", output_csv_path: str | Path | None = None) -> list[dict]`
 
 What it does:
 
@@ -274,7 +274,10 @@ What it does:
 4. Extracts labels and parses/filter gold alignments.
 5. Runs TF-IDF and BM25 hyperparameter configurations.
 6. Computes `Recall@1/5/10/20/50` and `MRR`.
-7. Returns results in memory (no file writes in this story).
+7. Writes CSV output to a run-stamped file by default:
+   `results/result_YYYYMMDD_HHMMSS_<gitsha>.csv`.
+   If `output_csv_path` is provided, that exact path is used (overwrite mode).
+8. Returns results in memory.
 
 Best-effort behavior:
 
@@ -282,12 +285,28 @@ Best-effort behavior:
 - Error records are accumulated and logged at the end of execution.
 - If all runs fail, the runner logs a zero-success warning and returns an empty result list.
 
-Result fields (per run):
+Result fields (per run, in-memory):
 
 - `dataset_name`, `track`, `version`
 - `model`, `hyperparameters`
 - `num_source_entities`, `num_target_entities`, `num_gold_pairs`
-- `recall_at_1`, `recall_at_5`, `recall_at_10`, `recall_at_20`, `recall_at_50`, `mrr`
+- `recall_at_1`, `recall_at_5`, `recall_at_10`, `recall_at_20`, `recall_at_50`, `mrr`, `runtime_seconds`
+
+CSV output columns:
+
+- `track`
+- `version`
+- `dataset`
+- `method`
+- `hyperparameters` (JSON string, sorted keys)
+- `candidate_size` (currently `50`)
+- `recall_at_1`
+- `recall_at_5`
+- `recall_at_10`
+- `recall_at_20`
+- `recall_at_50`
+- `mrr`
+- `runtime_seconds` (per dataset+method+hyperparameter run)
 
 Example:
 

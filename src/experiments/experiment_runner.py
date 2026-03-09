@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import csv
+from datetime import datetime
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+import subprocess
+import time
 from typing import Protocol, TypedDict
 
 from pyoxigraph import NamedNode, RdfFormat, Store
@@ -19,6 +24,21 @@ from src.retrieval.tfidf_retriever import TfidfRetriever
 RDF_TYPE = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
 OWL_CLASS = NamedNode("http://www.w3.org/2002/07/owl#Class")
 EVAL_KS: tuple[int, ...] = (1, 5, 10, 20, 50)
+CSV_COLUMNS: tuple[str, ...] = (
+    "track",
+    "version",
+    "dataset",
+    "method",
+    "hyperparameters",
+    "candidate_size",
+    "recall_at_1",
+    "recall_at_5",
+    "recall_at_10",
+    "recall_at_20",
+    "recall_at_50",
+    "mrr",
+    "runtime_seconds",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +63,7 @@ class ExperimentResultRecord(TypedDict):
     recall_at_20: float
     recall_at_50: float
     mrr: float
+    runtime_seconds: float
 
 
 class ExperimentErrorRecord(TypedDict):
@@ -109,9 +130,69 @@ def _build_labels(store: Store, entity_ids: list[str]) -> list[str]:
     return [extract_entity_label(store, uri) for uri in entity_ids]
 
 
-def run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[ExperimentResultRecord]:
+def _persist_results_to_csv(
+    results: list[ExperimentResultRecord], output_csv_path: str | Path
+) -> None:
+    output_path = Path(output_csv_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        for record in results:
+            writer.writerow(
+                {
+                    "track": record["track"],
+                    "version": record["version"],
+                    "dataset": record["dataset_name"],
+                    "method": record["model"],
+                    "hyperparameters": json.dumps(
+                        record["hyperparameters"], sort_keys=True, separators=(",", ":")
+                    ),
+                    "candidate_size": max(EVAL_KS),
+                    "recall_at_1": record["recall_at_1"],
+                    "recall_at_5": record["recall_at_5"],
+                    "recall_at_10": record["recall_at_10"],
+                    "recall_at_20": record["recall_at_20"],
+                    "recall_at_50": record["recall_at_50"],
+                    "mrr": record["mrr"],
+                    "runtime_seconds": record["runtime_seconds"],
+                }
+            )
+
+
+def _get_git_short_sha() -> str:
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.SubprocessError, OSError):
+        return "nogit"
+
+
+def _default_output_csv_path() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    git_sha = _get_git_short_sha()
+    return Path("results") / f"result_{timestamp}_{git_sha}.csv"
+
+
+def run_experiments(
+    config_path: str | Path = "config/datasets.yaml",
+    output_csv_path: str | Path | None = None,
+) -> list[ExperimentResultRecord]:
     """Run retrieval experiments over datasets and hyperparameter grids."""
-    logger.info("Starting experiment run with config: %s", config_path)
+    resolved_output_csv_path = (
+        Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
+    )
+    logger.info(
+        "Starting experiment run with config: %s (output_csv_path=%s)",
+        config_path,
+        resolved_output_csv_path,
+    )
     datasets = load_datasets_config(config_path=config_path)
     logger.info("Loaded %d dataset(s) from config", len(datasets))
     results: list[ExperimentResultRecord] = []
@@ -197,6 +278,7 @@ def run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[Ex
 
             for run in model_runs:
                 try:
+                    run_start = time.perf_counter()
                     logger.info(
                         "Running model=%s with hyperparameters=%s on dataset='%s'",
                         run.model_name,
@@ -228,14 +310,16 @@ def run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[Ex
                         "recall_at_20": recalls[20],
                         "recall_at_50": recalls[50],
                         "mrr": mrr,
+                        "runtime_seconds": time.perf_counter() - run_start,
                     }
                     results.append(result_record)
                     logger.info(
-                        "Completed run model=%s dataset='%s' mrr=%.4f recall@10=%.4f",
+                        "Completed run model=%s dataset='%s' mrr=%.4f recall@10=%.4f runtime=%.4fs",
                         run.model_name,
                         dataset_name,
                         result_record["mrr"],
                         result_record["recall_at_10"],
+                        result_record["runtime_seconds"],
                     )
                 except Exception as exc:
                     errors.append(
@@ -267,6 +351,28 @@ def run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[Ex
             logger.exception("Dataset processing failed for dataset='%s'", dataset_name)
             continue
 
+    try:
+        _persist_results_to_csv(results, output_csv_path=resolved_output_csv_path)
+        logger.info(
+            "Persisted %d result record(s) to %s",
+            len(results),
+            resolved_output_csv_path,
+        )
+    except Exception as exc:
+        errors.append(
+            ExperimentErrorRecord(
+                scope="result_persistence",
+                dataset_name="",
+                model="",
+                hyperparameters={},
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        )
+        logger.exception(
+            "Failed to persist result records to CSV at %s; returning in-memory results",
+            resolved_output_csv_path,
+        )
+
     if errors:
         logger.warning("Experiment run completed with %d error record(s)", len(errors))
         for index, record in enumerate(errors, start=1):
@@ -275,6 +381,5 @@ def run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[Ex
         logger.warning(
             "Best-effort execution completed with zero successful runs; all runs failed."
         )
-
     logger.info("Experiment run finished with %d result record(s)", len(results))
     return results

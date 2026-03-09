@@ -1,8 +1,13 @@
+import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import src.experiments.experiment_runner as experiment_runner_module
 from src.experiments.experiment_runner import run_experiments
+from src.retrieval.tfidf_retriever import TfidfRetriever
 
 
 def _source_rdf() -> str:
@@ -108,10 +113,14 @@ datasets:
         )
         return config_path
 
-    def test_runner_executes_and_returns_expected_shape(self) -> None:
+    def test_runner_executes_and_returns_expected_shape_and_writes_csv(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_fixture_dataset(Path(tmpdir))
-            results = run_experiments(config_path=config_path)
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(
+                config_path=config_path, output_csv_path=output_csv_path
+            )
+            self.assertTrue(output_csv_path.exists())
 
         self.assertTrue(results)
         self.assertEqual(len(results), 4)  # 2 TF-IDF configs + 2 BM25 configs
@@ -135,6 +144,7 @@ datasets:
                 "recall_at_20",
                 "recall_at_50",
                 "mrr",
+                "runtime_seconds",
             ):
                 self.assertIn(key, row)
 
@@ -154,14 +164,93 @@ datasets:
                 self.assertIsInstance(metric_value, float)
                 self.assertGreaterEqual(metric_value, 0.0)
                 self.assertLessEqual(metric_value, 1.0)
+            self.assertGreaterEqual(row["runtime_seconds"], 0.0)
+
+    def test_csv_schema_and_serialization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(
+                config_path=config_path, output_csv_path=output_csv_path
+            )
+
+            with output_csv_path.open("r", encoding="utf-8", newline="") as csv_file:
+                reader = csv.DictReader(csv_file)
+                self.assertEqual(
+                    reader.fieldnames,
+                    [
+                        "track",
+                        "version",
+                        "dataset",
+                        "method",
+                        "hyperparameters",
+                        "candidate_size",
+                        "recall_at_1",
+                        "recall_at_5",
+                        "recall_at_10",
+                        "recall_at_20",
+                        "recall_at_50",
+                        "mrr",
+                        "runtime_seconds",
+                    ],
+                )
+                rows = list(reader)
+
+        self.assertEqual(len(rows), len(results))
+        for row in rows:
+            self.assertEqual(row["dataset"], "fixture_dataset")
+            self.assertIn(row["method"], {"tfidf", "bm25"})
+            self.assertEqual(row["candidate_size"], "50")
+            json.loads(row["hyperparameters"])
+            runtime_seconds = float(row["runtime_seconds"])
+            self.assertGreaterEqual(runtime_seconds, 0.0)
+
+    def test_best_effort_writes_successful_rows_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with patch.object(
+                TfidfRetriever, "retrieve", side_effect=RuntimeError("forced tfidf failure")
+            ):
+                results = run_experiments(
+                    config_path=config_path, output_csv_path=output_csv_path
+                )
+
+            with output_csv_path.open("r", encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["method"] == "bm25" for row in rows))
+
+    def test_csv_persistence_failure_does_not_abort_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            with patch.object(
+                experiment_runner_module,
+                "_persist_results_to_csv",
+                side_effect=OSError("forced csv write failure"),
+            ):
+                results = run_experiments(config_path=config_path)
+
+        self.assertEqual(len(results), 4)
 
     def test_runner_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_fixture_dataset(Path(tmpdir))
-            first = run_experiments(config_path=config_path)
-            second = run_experiments(config_path=config_path)
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            first = run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+            second = run_experiments(config_path=config_path, output_csv_path=output_csv_path)
 
-        self.assertEqual(first, second)
+        first_without_runtime = [
+            {key: value for key, value in row.items() if key != "runtime_seconds"}
+            for row in first
+        ]
+        second_without_runtime = [
+            {key: value for key, value in row.items() if key != "runtime_seconds"}
+            for row in second
+        ]
+        self.assertEqual(first_without_runtime, second_without_runtime)
 
 
 if __name__ == "__main__":
