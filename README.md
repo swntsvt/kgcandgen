@@ -55,11 +55,19 @@ datasets:
 
 ## Testing
 
-Run tests with explicit discovery:
+Run tests:
+
+```bash
+./venv/bin/python -m unittest -v
+```
+
+Equivalent explicit discovery command:
 
 ```bash
 ./venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+Note: run tests in an environment where `requirements.txt` has been installed.
 
 ## CLI Usage
 
