@@ -150,3 +150,58 @@ retriever.fit(
 )
 results = retriever.retrieve("plant height value", k=2)
 ```
+
+## BM25 Retrieval
+
+Use `Bm25Retriever` from `src/retrieval/bm25_retriever.py` to generate top-k lexical
+candidate alignments with BM25.
+
+Public API:
+
+- `fit(entity_ids: list[str], labels: list[str])`
+- `retrieve(query_text: str, k: int) -> list[tuple[str, float]]`
+
+Hyperparameters:
+
+- `k1`
+- `b`
+
+Defaults:
+
+- `k1=1.5`
+- `b=0.75`
+
+Behavior:
+
+- Labels and query text are preprocessed with `preprocess_text(...)`.
+- Retrieval returns ranked `(entity_id, score)` pairs in descending similarity order.
+- If `k` is larger than index size, all available candidates are returned.
+
+Example:
+
+```python
+from src.retrieval.bm25_retriever import Bm25Retriever
+
+retriever = Bm25Retriever(k1=1.5, b=0.75)
+retriever.fit(
+    entity_ids=["e1", "e2", "e3"],
+    labels=["plant height", "leaf color", "root length"],
+)
+results = retriever.retrieve("plant height value", k=2)
+```
+
+## Retrieval Library Choices
+
+The project uses different libraries for TF-IDF and BM25 intentionally:
+
+- `scikit-learn` for TF-IDF:
+  - Mature and well-tested `TfidfVectorizer`.
+  - Direct control over TF-IDF hyperparameters (`ngram_range`, `min_df`, `max_df`, `sublinear_tf`).
+  - Simple sparse-matrix workflow for deterministic top-k ranking.
+
+- `bm25s` for BM25:
+  - Purpose-built BM25 implementation with direct BM25 hyperparameters (`k1`, `b`).
+  - Efficient indexing/retrieval API for tokenized corpora.
+  - Keeps BM25 logic explicit and separate from TF-IDF vectorization.
+
+This separation keeps each retriever implementation clear, comparable, and easy to tune independently.
