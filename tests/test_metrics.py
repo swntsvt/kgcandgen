@@ -4,6 +4,7 @@ from src.evaluation.metrics import (
     compute_mrr,
     compute_recall_at_k,
     compute_recall_at_k_and_mrr,
+    compute_recall_at_ks_and_mrr,
 )
 
 
@@ -86,6 +87,21 @@ class MetricsTests(unittest.TestCase):
             compute_recall_at_k_and_mrr(self.predictions, self.gold, k=0)
         with self.assertRaises(ValueError):
             compute_recall_at_k_and_mrr(self.predictions, {}, k=1)
+
+    def test_multi_k_combined_function_matches_individual_results(self) -> None:
+        ks = [1, 2, 5]
+        recalls, mrr = compute_recall_at_ks_and_mrr(self.predictions, self.gold, ks)
+        self.assertEqual(mrr, compute_mrr(self.predictions, self.gold))
+        for k in ks:
+            self.assertEqual(recalls[k], compute_recall_at_k(self.predictions, self.gold, k))
+
+    def test_multi_k_combined_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            compute_recall_at_ks_and_mrr(self.predictions, self.gold, [])
+        with self.assertRaises(ValueError):
+            compute_recall_at_ks_and_mrr(self.predictions, self.gold, [0, 1])
+        with self.assertRaises(ValueError):
+            compute_recall_at_ks_and_mrr(self.predictions, {}, [1])
 
 
 if __name__ == "__main__":

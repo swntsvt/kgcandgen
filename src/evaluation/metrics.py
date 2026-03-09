@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 
 def _validate_gold(gold: dict[str, str]) -> None:
     if not gold:
@@ -69,3 +71,31 @@ def compute_recall_at_k_and_mrr(
 
     denominator = len(gold)
     return hits / denominator, reciprocal_sum / denominator
+
+
+def compute_recall_at_ks_and_mrr(
+    predictions: dict[str, list[tuple[str, float]]], gold: dict[str, str], ks: Sequence[int]
+) -> tuple[dict[int, float], float]:
+    """Compute Recall@k for multiple cutoffs and MRR in one pass over gold mappings."""
+    if not ks:
+        raise ValueError("ks must not be empty.")
+    if any(k <= 0 for k in ks):
+        raise ValueError("all k values must be positive integers.")
+    _validate_gold(gold)
+
+    unique_ks = sorted(set(ks))
+    hit_counts = {k: 0 for k in unique_ks}
+    reciprocal_sum = 0.0
+
+    for source, gold_target in gold.items():
+        ranked_candidates = predictions.get(source, [])
+        rank = _find_gold_rank(ranked_candidates, gold_target)
+        if rank > 0:
+            reciprocal_sum += 1.0 / rank
+            for k in unique_ks:
+                if rank <= k:
+                    hit_counts[k] += 1
+
+    denominator = len(gold)
+    recalls = {k: hit_counts[k] / denominator for k in unique_ks}
+    return recalls, reciprocal_sum / denominator

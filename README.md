@@ -256,3 +256,49 @@ recall_at_1 = compute_recall_at_k(predictions, gold, k=1)
 mrr = compute_mrr(predictions, gold)
 recall_at_1_combined, mrr_combined = compute_recall_at_k_and_mrr(predictions, gold, k=1)
 ```
+
+## Experiment Runner
+
+Use `run_experiments(...)` from `src/experiments/experiment_runner.py` to execute retrieval
+experiments across configured datasets and hyperparameter grids for both TF-IDF and BM25.
+
+Public API:
+
+- `run_experiments(config_path: str | Path = "config/datasets.yaml") -> list[dict]`
+
+What it does:
+
+1. Loads datasets from `config/datasets.yaml`.
+2. Loads source/target RDF with strict-then-lenient RDF/XML fallback.
+3. Selects only `owl:Class` entities from both graphs.
+4. Extracts labels and parses/filter gold alignments.
+5. Runs TF-IDF and BM25 hyperparameter configurations.
+6. Computes `Recall@1/5/10/20/50` and `MRR`.
+7. Returns results in memory (no file writes in this story).
+
+Best-effort behavior:
+
+- Dataset/model failures are logged and execution continues for remaining runs.
+- Error records are accumulated and logged at the end of execution.
+- If all runs fail, the runner logs a zero-success warning and returns an empty result list.
+
+Result fields (per run):
+
+- `dataset_name`, `track`, `version`
+- `model`, `hyperparameters`
+- `num_source_entities`, `num_target_entities`, `num_gold_pairs`
+- `recall_at_1`, `recall_at_5`, `recall_at_10`, `recall_at_20`, `recall_at_50`, `mrr`
+
+Example:
+
+```python
+from src.experiments.experiment_runner import run_experiments
+
+results = run_experiments("config/datasets.yaml")
+```
+
+Test command:
+
+```bash
+./venv/bin/python -m unittest tests/test_experiment_runner.py -v
+```
