@@ -106,3 +106,47 @@ NLTK resources:
 
 - The preprocessor checks required NLTK resources (`punkt`, `punkt_tab`, `stopwords`).
 - If missing, it auto-downloads them at runtime.
+
+## TF-IDF Retrieval
+
+Use `TfidfRetriever` from `src/retrieval/tfidf_retriever.py` to generate top-k lexical
+candidate alignments.
+
+Public API:
+
+- `fit(entity_ids: list[str], labels: list[str])`
+- `retrieve(query_text: str, k: int) -> list[tuple[str, float]]`
+
+Hyperparameters:
+
+- `ngram_range`
+- `min_df`
+- `max_df`
+- `sublinear_tf`
+
+Defaults:
+
+- `ngram_range=(1, 1)`
+- `min_df=1`
+- `max_df=1.0`
+- `sublinear_tf=False`
+
+Behavior:
+
+- Labels and query text are preprocessed with `preprocess_text(...)`.
+- Retrieval returns ranked `(entity_id, score)` pairs in descending similarity order.
+- If `k` is larger than index size, all available candidates are returned.
+- Scoring uses a linear kernel over L2-normalized TF-IDF vectors (cosine-equivalent).
+
+Example:
+
+```python
+from src.retrieval.tfidf_retriever import TfidfRetriever
+
+retriever = TfidfRetriever(ngram_range=(1, 2), min_df=1, max_df=1.0, sublinear_tf=False)
+retriever.fit(
+    entity_ids=["e1", "e2", "e3"],
+    labels=["plant height", "leaf color", "root length"],
+)
+results = retriever.retrieve("plant height value", k=2)
+```
