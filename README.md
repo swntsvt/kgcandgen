@@ -79,3 +79,30 @@ Fixes applied in `alignment_parser`:
 4. Malformed cells are skipped instead of aborting the full parse.
 
 Result: real dataset parsing now succeeds and returns non-zero mappings for `flopo-pto`.
+
+## Text Preprocessing
+
+Use `preprocess_text(text)` from `src/preprocessing/text_preprocessor.py` to normalize labels
+for lexical retrieval.
+
+Processing order:
+
+1. lowercase
+2. camel-case splitting
+3. tokenization
+4. stopword removal
+5. punctuation removal
+
+Example:
+
+```python
+from src.preprocessing.text_preprocessor import preprocess_text
+
+tokens = preprocess_text("The PlantHeightValue, of LeafSize!")
+# ["plant", "height", "value", "leaf", "size"]
+```
+
+NLTK resources:
+
+- The preprocessor checks required NLTK resources (`punkt`, `punkt_tab`, `stopwords`).
+- If missing, it auto-downloads them at runtime.
