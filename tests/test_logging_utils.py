@@ -8,12 +8,19 @@ from src.logging_utils import setup_logging
 
 
 class SetupLoggingTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        project_logger = logging.getLogger("src")
+        for handler in project_logger.handlers[:]:
+            project_logger.removeHandler(handler)
+            handler.close()
+
     def test_setup_logging_writes_to_console_and_file(self) -> None:
         original_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmpdir:
             os.chdir(tmpdir)
             try:
                 logger = setup_logging()
+                self.assertEqual(logger.name, "src")
 
                 handlers = logger.handlers
                 has_file_handler = any(isinstance(h, logging.FileHandler) for h in handlers)
@@ -53,6 +60,17 @@ class SetupLoggingTests(unittest.TestCase):
                 self.assertTrue(first_handler.stream is None or first_handler.stream.closed)
             finally:
                 os.chdir(original_cwd)
+
+    def test_setup_logging_does_not_mutate_root_handlers(self) -> None:
+        root_logger = logging.getLogger()
+        sentinel_handler = logging.StreamHandler()
+        root_logger.addHandler(sentinel_handler)
+        try:
+            setup_logging()
+            self.assertIn(sentinel_handler, root_logger.handlers)
+        finally:
+            root_logger.removeHandler(sentinel_handler)
+            sentinel_handler.close()
 
 
 if __name__ == "__main__":

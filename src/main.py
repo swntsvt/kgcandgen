@@ -10,7 +10,7 @@ from pathlib import Path
 from src.experiments.experiment_runner import run_experiments
 from src.logging_utils import setup_logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("src.main")
 
 
 def _build_parser() -> argparse.ArgumentParser:

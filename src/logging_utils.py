@@ -15,8 +15,9 @@ def setup_logging() -> logging.Logger:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_path = logs_dir / f"experiment_{timestamp}.log"
 
-    logger = logging.getLogger()
+    logger = logging.getLogger("src")
     logger.setLevel(logging.INFO)
+    logger.propagate = False
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
         handler.close()
