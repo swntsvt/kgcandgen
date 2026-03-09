@@ -17,7 +17,9 @@ def setup_logging() -> logging.Logger:
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    logger.handlers.clear()
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+        handler.close()
 
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"

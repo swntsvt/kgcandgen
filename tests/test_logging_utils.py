@@ -34,6 +34,26 @@ class SetupLoggingTests(unittest.TestCase):
             finally:
                 os.chdir(original_cwd)
 
+    def test_setup_logging_closes_previous_file_handlers(self) -> None:
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            os.chdir(tmpdir)
+            try:
+                first_logger = setup_logging()
+                first_file_handlers = [
+                    handler
+                    for handler in first_logger.handlers
+                    if isinstance(handler, logging.FileHandler)
+                ]
+                self.assertTrue(first_file_handlers)
+                first_handler = first_file_handlers[0]
+
+                second_logger = setup_logging()
+                self.assertIs(first_logger, second_logger)
+                self.assertTrue(first_handler.stream is None or first_handler.stream.closed)
+            finally:
+                os.chdir(original_cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

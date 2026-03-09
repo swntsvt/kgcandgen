@@ -73,7 +73,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Results CSV: {final_output_path}")
         return 0
     except Exception as exc:
-        logger.exception("CLI execution failed")
+        logger.exception(
+            "CLI execution failed (config_path=%s, output_csv_path=%s)",
+            args.config_path,
+            args.output_csv_path,
+        )
         print(f"Error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 

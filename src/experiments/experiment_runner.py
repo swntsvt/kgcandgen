@@ -198,9 +198,14 @@ def run_experiments(
     results: list[ExperimentResultRecord] = []
     errors: list[ExperimentErrorRecord] = []
     k_max = max(EVAL_KS)
+    datasets_processed = 0
+    successful_model_runs = 0
+    failed_model_runs = 0
+    dataset_failures = 0
 
     for dataset_name in sorted(datasets.keys()):
         dataset = datasets[dataset_name]
+        datasets_processed += 1
         try:
             logger.info(
                 "Processing dataset '%s' (track=%s, version=%s)",
@@ -247,6 +252,13 @@ def run_experiments(
             logger.info(
                 "Filtered gold mappings for dataset '%s': %d pair(s)",
                 dataset_name,
+                len(gold_filtered),
+            )
+            logger.info(
+                "Dataset '%s' evaluation setup: source_entities=%d target_entities=%d eval_sources=%d",
+                dataset_name,
+                len(source_entities),
+                len(target_entities),
                 len(gold_filtered),
             )
             target_labels = _build_labels(target_store, target_entities)
@@ -313,6 +325,7 @@ def run_experiments(
                         "runtime_seconds": time.perf_counter() - run_start,
                     }
                     results.append(result_record)
+                    successful_model_runs += 1
                     logger.info(
                         "Completed run model=%s dataset='%s' mrr=%.4f recall@10=%.4f runtime=%.4fs",
                         run.model_name,
@@ -322,6 +335,7 @@ def run_experiments(
                         result_record["runtime_seconds"],
                     )
                 except Exception as exc:
+                    failed_model_runs += 1
                     errors.append(
                         ExperimentErrorRecord(
                             scope="model_run",
@@ -338,7 +352,9 @@ def run_experiments(
                         run.hyperparameters,
                     )
                     continue
+            logger.info("Finished dataset '%s' model runs", dataset_name)
         except Exception as exc:
+            dataset_failures += 1
             errors.append(
                 ExperimentErrorRecord(
                     scope="dataset",
@@ -349,6 +365,7 @@ def run_experiments(
                 )
             )
             logger.exception("Dataset processing failed for dataset='%s'", dataset_name)
+            logger.info("Finished dataset '%s' with dataset-level failure", dataset_name)
             continue
 
     try:
@@ -381,5 +398,14 @@ def run_experiments(
         logger.warning(
             "Best-effort execution completed with zero successful runs; all runs failed."
         )
+    logger.info(
+        "Run summary: datasets_processed=%d dataset_failures=%d successful_model_runs=%d failed_model_runs=%d result_rows=%d error_records=%d",
+        datasets_processed,
+        dataset_failures,
+        successful_model_runs,
+        failed_model_runs,
+        len(results),
+        len(errors),
+    )
     logger.info("Experiment run finished with %d result record(s)", len(results))
     return results

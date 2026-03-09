@@ -252,6 +252,35 @@ datasets:
         ]
         self.assertEqual(first_without_runtime, second_without_runtime)
 
+    def test_runner_emits_run_summary_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with self.assertLogs("src.experiments.experiment_runner", level="INFO") as captured:
+                run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+
+        combined = "\n".join(captured.output)
+        self.assertIn("Processing dataset 'fixture_dataset'", combined)
+        self.assertIn("Finished dataset 'fixture_dataset' model runs", combined)
+        self.assertIn("Run summary:", combined)
+        self.assertIn("successful_model_runs=4", combined)
+        self.assertIn("failed_model_runs=0", combined)
+
+    def test_runner_failure_logs_include_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with self.assertLogs("src.experiments.experiment_runner", level="INFO") as captured:
+                with patch.object(
+                    TfidfRetriever, "retrieve", side_effect=RuntimeError("forced tfidf failure")
+                ):
+                    run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+
+        combined = "\n".join(captured.output)
+        self.assertIn("Model run failed for dataset='fixture_dataset'", combined)
+        self.assertIn("Run summary:", combined)
+        self.assertIn("failed_model_runs=2", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

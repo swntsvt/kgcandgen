@@ -87,6 +87,25 @@ CLI behavior:
 - Uses logging for detailed progress/errors.
 - Prints only the final results CSV path on success.
 
+## Logging
+
+Experiment logs are written to timestamped files under `logs/`:
+
+- `logs/experiment_<timestamp>.log`
+
+What gets logged:
+
+- Config loading start/validation results.
+- Dataset and model run phases in experiment execution.
+- Per-run completion metrics and runtime.
+- CSV persistence status and path.
+- Final run summary (datasets processed, successes/failures, result rows, error records).
+
+Error handling in logs:
+
+- Failures are logged with stack traces and accumulated as error records.
+- The final summary block includes total error records so run health can be checked quickly.
+
 ## Alignment RDF Parsing Notes
 
 During validation on `biodiv/2018/flopo-pto/reference.rdf`, we identified a malformed IRI:

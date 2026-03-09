@@ -126,11 +126,14 @@ datasets:
     def test_cli_failure_for_missing_config(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            exit_code = main(["--config-path", "config/does_not_exist.yaml"])
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = main(["--config-path", "config/does_not_exist.yaml"])
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
+        combined = "\n".join(captured.output)
+        self.assertIn("CLI execution failed (config_path=config/does_not_exist.yaml", combined)
 
     def test_cli_default_output_fails_when_no_new_file_is_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
