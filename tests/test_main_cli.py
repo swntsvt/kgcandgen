@@ -157,6 +157,33 @@ datasets:
         self.assertEqual(exit_code, 1)
         self.assertIn("No new results file was created", stderr.getvalue())
 
+    def test_cli_progress_flag_passes_true(self) -> None:
+        with patch("src.main.run_experiments") as run_mock:
+            with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
+                exit_code = main(["--config-path", "config/datasets.yaml", "--progress"])
+
+        self.assertEqual(exit_code, 0)
+        run_mock.assert_called_once()
+        self.assertTrue(run_mock.call_args.kwargs["show_progress"])
+
+    def test_cli_no_progress_flag_passes_false(self) -> None:
+        with patch("src.main.run_experiments") as run_mock:
+            with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
+                exit_code = main(["--config-path", "config/datasets.yaml", "--no-progress"])
+
+        self.assertEqual(exit_code, 0)
+        run_mock.assert_called_once()
+        self.assertFalse(run_mock.call_args.kwargs["show_progress"])
+
+    def test_cli_default_progress_passes_none(self) -> None:
+        with patch("src.main.run_experiments") as run_mock:
+            with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
+                exit_code = main(["--config-path", "config/datasets.yaml"])
+
+        self.assertEqual(exit_code, 0)
+        run_mock.assert_called_once()
+        self.assertIsNone(run_mock.call_args.kwargs["show_progress"])
+
 
 if __name__ == "__main__":
     unittest.main()

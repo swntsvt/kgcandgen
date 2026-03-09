@@ -81,10 +81,26 @@ With explicit output CSV path:
 python src/main.py --output-csv-path results/my_run.csv
 ```
 
+With progress bars forced on:
+
+```bash
+python src/main.py --progress
+```
+
+With progress bars forced off:
+
+```bash
+python src/main.py --no-progress
+```
+
 CLI behavior:
 
 - Runs all datasets listed in the provided config.
 - Uses logging for detailed progress/errors.
+- Progress bars use auto mode by default:
+  - enabled in interactive terminals
+  - disabled in non-interactive contexts (CI/redirected output)
+- `--progress` and `--no-progress` override default progress behavior.
 - Prints only the final results CSV path on success.
 
 ## Logging
@@ -309,7 +325,7 @@ experiments across configured datasets and hyperparameter grids for both TF-IDF 
 
 Public API:
 
-- `run_experiments(config_path: str | Path = "config/datasets.yaml", output_csv_path: str | Path | None = None) -> list[dict]`
+- `run_experiments(config_path: str | Path = "config/datasets.yaml", output_csv_path: str | Path | None = None, show_progress: bool | None = None) -> list[dict]`
 
 What it does:
 
@@ -323,6 +339,7 @@ What it does:
    `results/result_YYYYMMDD_HHMMSS_<gitsha>.csv`.
    If `output_csv_path` is provided, that exact path is used (overwrite mode).
 8. Returns results in memory.
+9. Shows optional tqdm progress bars when enabled.
 
 Best-effort behavior:
 

@@ -9,10 +9,12 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Protocol, TypedDict
 
 from pyoxigraph import NamedNode, RdfFormat, Store
+from tqdm import tqdm
 
 from src.config_loader import load_datasets_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
@@ -183,15 +185,18 @@ def _default_output_csv_path() -> Path:
 def run_experiments(
     config_path: str | Path = "config/datasets.yaml",
     output_csv_path: str | Path | None = None,
+    show_progress: bool | None = None,
 ) -> list[ExperimentResultRecord]:
     """Run retrieval experiments over datasets and hyperparameter grids."""
+    progress_enabled = sys.stderr.isatty() if show_progress is None else show_progress
     resolved_output_csv_path = (
         Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
     )
     logger.info(
-        "Starting experiment run with config: %s (output_csv_path=%s)",
+        "Starting experiment run with config: %s (output_csv_path=%s, progress=%s)",
         config_path,
         resolved_output_csv_path,
+        progress_enabled,
     )
     datasets = load_datasets_config(config_path=config_path)
     logger.info("Loaded %d dataset(s) from config", len(datasets))
@@ -203,7 +208,13 @@ def run_experiments(
     failed_model_runs = 0
     dataset_failures = 0
 
-    for dataset_name in sorted(datasets.keys()):
+    dataset_names = sorted(datasets.keys())
+    dataset_iterator = tqdm(
+        dataset_names,
+        desc="Datasets",
+        disable=not progress_enabled,
+    )
+    for dataset_name in dataset_iterator:
         dataset = datasets[dataset_name]
         datasets_processed += 1
         try:
@@ -288,7 +299,12 @@ def run_experiments(
                     )
                 )
 
-            for run in model_runs:
+            model_iterator = tqdm(
+                model_runs,
+                desc=f"Models:{dataset_name}",
+                disable=not progress_enabled,
+            )
+            for run in model_iterator:
                 try:
                     run_start = time.perf_counter()
                     logger.info(
@@ -299,7 +315,13 @@ def run_experiments(
                     )
                     run.retriever.fit(target_entities, target_labels)
                     predictions: dict[str, list[tuple[str, float]]] = {}
-                    for source_id in eval_sources:
+                    source_iterator = tqdm(
+                        eval_sources,
+                        desc=f"Sources:{dataset_name}:{run.model_name}",
+                        disable=not progress_enabled,
+                        leave=False,
+                    )
+                    for source_id in source_iterator:
                         predictions[source_id] = run.retriever.retrieve(
                             source_label_map[source_id], k=k_max
                         )

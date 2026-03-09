@@ -30,6 +30,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "(result_YYYYMMDD_HHMMSS_<gitsha>.csv)."
         ),
     )
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        action="store_true",
+        help="Force-enable progress bars.",
+    )
+    progress_group.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Force-disable progress bars.",
+    )
     return parser
 
 
@@ -57,10 +68,22 @@ def main(argv: list[str] | None = None) -> int:
 
     setup_logging()
     try:
+        show_progress: bool | None
+        if args.progress:
+            show_progress = True
+        elif args.no_progress:
+            show_progress = False
+        else:
+            show_progress = None
+
         existing_files = (
             _collect_existing_result_files() if args.output_csv_path is None else set()
         )
-        run_experiments(config_path=args.config_path, output_csv_path=args.output_csv_path)
+        run_experiments(
+            config_path=args.config_path,
+            output_csv_path=args.output_csv_path,
+            show_progress=show_progress,
+        )
         if args.output_csv_path:
             final_output_path = Path(args.output_csv_path)
             if not final_output_path.exists():

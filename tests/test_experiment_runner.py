@@ -281,6 +281,39 @@ datasets:
         self.assertIn("Run summary:", combined)
         self.assertIn("failed_model_runs=2", combined)
 
+    def test_runner_with_show_progress_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(
+                config_path=config_path,
+                output_csv_path=output_csv_path,
+                show_progress=False,
+            )
+
+        self.assertEqual(len(results), 4)
+
+    def test_runner_with_show_progress_true_uses_tqdm(self) -> None:
+        call_count = 0
+
+        def _fake_tqdm(iterable, *args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return iterable
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with patch("src.experiments.experiment_runner.tqdm", side_effect=_fake_tqdm):
+                results = run_experiments(
+                    config_path=config_path,
+                    output_csv_path=output_csv_path,
+                    show_progress=True,
+                )
+
+        self.assertEqual(len(results), 4)
+        self.assertGreater(call_count, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
