@@ -205,3 +205,54 @@ The project uses different libraries for TF-IDF and BM25 intentionally:
   - Keeps BM25 logic explicit and separate from TF-IDF vectorization.
 
 This separation keeps each retriever implementation clear, comparable, and easy to tune independently.
+
+## Evaluation Metrics
+
+Use `src/evaluation/metrics.py` to measure candidate generation quality with:
+
+- `Recall@k`
+- `MRR` (Mean Reciprocal Rank)
+
+Input format:
+
+- `predictions: dict[source_id, list[(target_id, score)]]`
+- `gold: dict[source_id, target_id]`
+
+Implemented functions:
+
+- `compute_recall_at_k(predictions, gold, k) -> float`
+- `compute_mrr(predictions, gold) -> float`
+- `compute_recall_at_k_and_mrr(predictions, gold, k) -> tuple[float, float]`
+
+Behavior:
+
+- Candidate list order is treated as rank order.
+- Missing prediction entries for a gold source contribute `0`.
+- `Recall@k` checks whether the gold target appears in top `k`.
+- `MRR` uses reciprocal rank of the first correct target (`1/rank`), else `0`.
+- `compute_recall_at_k_and_mrr(...)` computes both metrics in one pass for efficiency.
+
+Validation rules:
+
+- `k <= 0` raises `ValueError` for `Recall@k`.
+- Empty `gold` raises `ValueError` for both metrics.
+
+Example:
+
+```python
+from src.evaluation.metrics import compute_mrr, compute_recall_at_k
+from src.evaluation.metrics import compute_recall_at_k_and_mrr
+
+predictions = {
+    "s1": [("t1", 0.9), ("t2", 0.8)],
+    "s2": [("t3", 0.7)],
+}
+gold = {
+    "s1": "t2",
+    "s2": "t9",
+}
+
+recall_at_1 = compute_recall_at_k(predictions, gold, k=1)
+mrr = compute_mrr(predictions, gold)
+recall_at_1_combined, mrr_combined = compute_recall_at_k_and_mrr(predictions, gold, k=1)
+```
