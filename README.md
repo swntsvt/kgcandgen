@@ -9,14 +9,14 @@ Use Python 3.12.
 Create and activate a virtual environment:
 
 ```bash
-python3.12 -m venv venv
+python -m venv venv
 source venv/bin/activate
 ```
 
 Install dependencies:
 
 ```bash
-python3.12 -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## Project Structure
@@ -60,6 +60,32 @@ Run tests with explicit discovery:
 ```bash
 ./venv/bin/python -m unittest discover -s tests -p "test_*.py" -v
 ```
+
+## CLI Usage
+
+Use the CLI entry point to run experiments across all datasets configured in YAML:
+
+```bash
+python src/main.py
+```
+
+With explicit config path:
+
+```bash
+python src/main.py --config-path config/datasets.yaml
+```
+
+With explicit output CSV path:
+
+```bash
+python src/main.py --output-csv-path results/my_run.csv
+```
+
+CLI behavior:
+
+- Runs all datasets listed in the provided config.
+- Uses logging for detailed progress/errors.
+- Prints only the final results CSV path on success.
 
 ## Alignment RDF Parsing Notes
 
