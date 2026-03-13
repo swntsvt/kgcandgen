@@ -43,6 +43,14 @@ class TfidfRetrieverTests(unittest.TestCase):
 
         self.assertEqual(results[0][0], "e1")
 
+    def test_preprocessed_entrypoints(self) -> None:
+        retriever = TfidfRetriever()
+        retriever.fit_preprocessed(["e1", "e2"], ["plant height value", "leaf color"])
+
+        results = retriever.retrieve_preprocessed("plant height value", k=1)
+
+        self.assertEqual(results[0][0], "e1")
+
     def test_retrieve_before_fit_raises(self) -> None:
         retriever = TfidfRetriever()
         with self.assertRaises(ValueError):

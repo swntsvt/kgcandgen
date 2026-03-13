@@ -168,6 +168,9 @@ datasets:
                 "num_source_entities",
                 "num_target_entities",
                 "num_gold_pairs",
+                "gold_count",
+                "candidate_size",
+                "dataset_prep_seconds",
                 "recalls",
                 "mrr",
                 "runtime_seconds",
@@ -177,6 +180,9 @@ datasets:
             self.assertEqual(row["num_source_entities"], 2)  # owl:Class only
             self.assertEqual(row["num_target_entities"], 3)  # owl:Class only
             self.assertEqual(row["num_gold_pairs"], 2)  # non-class mapping filtered out
+            self.assertEqual(row["gold_count"], 2)
+            self.assertEqual(row["candidate_size"], 3)
+            self.assertGreaterEqual(row["dataset_prep_seconds"], 0.0)
 
             recalls = row["recalls"]
             self.assertEqual(list(recalls.keys()), [1, 5, 10, 20, 50])
@@ -208,7 +214,9 @@ datasets:
                         "dataset",
                         "method",
                         "hyperparameters",
+                        "gold_count",
                         "candidate_size",
+                        "dataset_prep_seconds",
                         "recall_at_1",
                         "recall_at_5",
                         "recall_at_10",
@@ -224,8 +232,11 @@ datasets:
         for row in rows:
             self.assertEqual(row["dataset"], "fixture_dataset")
             self.assertIn(row["method"], {"tfidf", "bm25"})
-            self.assertEqual(row["candidate_size"], "50")
+            self.assertEqual(row["gold_count"], "2")
+            self.assertEqual(row["candidate_size"], "3")
             json.loads(row["hyperparameters"])
+            dataset_prep_seconds = float(row["dataset_prep_seconds"])
+            self.assertGreaterEqual(dataset_prep_seconds, 0.0)
             runtime_seconds = float(row["runtime_seconds"])
             self.assertGreaterEqual(runtime_seconds, 0.0)
 
@@ -270,7 +281,9 @@ experiments:
                 "dataset",
                 "method",
                 "hyperparameters",
+                "gold_count",
                 "candidate_size",
+                "dataset_prep_seconds",
                 "recall_at_2",
                 "recall_at_4",
                 "mrr",
@@ -278,7 +291,8 @@ experiments:
             ],
         )
         self.assertEqual(len(rows), 2)
-        self.assertTrue(all(row["candidate_size"] == "4" for row in rows))
+        self.assertTrue(all(row["gold_count"] == "2" for row in rows))
+        self.assertTrue(all(row["candidate_size"] == "3" for row in rows))
 
     def test_runner_fails_fast_for_invalid_experiment_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -340,12 +354,27 @@ experiments:
             ["z_dataset", "z_dataset", "a_dataset", "a_dataset"],
         )
 
+    def test_shared_preprocessing_runs_once_per_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with patch(
+                "src.experiments.experiment_runner.preprocess_text",
+                wraps=experiment_runner_module.preprocess_text,
+            ) as preprocess_mock:
+                run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+
+        # 3 target labels + 2 evaluated source labels; should not scale with model count.
+        self.assertEqual(preprocess_mock.call_count, 5)
+
     def test_best_effort_writes_successful_rows_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_fixture_dataset(Path(tmpdir))
             output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
             with patch.object(
-                TfidfRetriever, "retrieve", side_effect=RuntimeError("forced tfidf failure")
+                TfidfRetriever,
+                "retrieve_preprocessed",
+                side_effect=RuntimeError("forced tfidf failure"),
             ):
                 results = run_experiments(
                     config_path=config_path, output_csv_path=output_csv_path
@@ -378,11 +407,19 @@ experiments:
             second = run_experiments(config_path=config_path, output_csv_path=output_csv_path)
 
         first_without_runtime = [
-            {key: value for key, value in row.items() if key != "runtime_seconds"}
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"runtime_seconds", "dataset_prep_seconds"}
+            }
             for row in first
         ]
         second_without_runtime = [
-            {key: value for key, value in row.items() if key != "runtime_seconds"}
+            {
+                key: value
+                for key, value in row.items()
+                if key not in {"runtime_seconds", "dataset_prep_seconds"}
+            }
             for row in second
         ]
         self.assertEqual(first_without_runtime, second_without_runtime)
@@ -407,7 +444,9 @@ experiments:
             output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
             with self.assertLogs("src.experiments.experiment_runner", level="INFO") as captured:
                 with patch.object(
-                    TfidfRetriever, "retrieve", side_effect=RuntimeError("forced tfidf failure")
+                    TfidfRetriever,
+                    "retrieve_preprocessed",
+                    side_effect=RuntimeError("forced tfidf failure"),
                 ):
                     run_experiments(config_path=config_path, output_csv_path=output_csv_path)
 

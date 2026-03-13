@@ -23,12 +23,26 @@ class Bm25Retriever:
             raise ValueError("entity_ids and labels must not be empty.")
 
         tokenized_corpus = [preprocess_text(label) for label in labels]
-        self._model.index(tokenized_corpus, show_progress=False)
+        self.fit_tokenized(entity_ids, tokenized_corpus)
+
+    def fit_tokenized(self, entity_ids: list[str], tokenized_labels: list[list[str]]) -> None:
+        """Fit BM25 index from already-tokenized labels."""
+        if len(entity_ids) != len(tokenized_labels):
+            raise ValueError("entity_ids and tokenized_labels must have the same length.")
+        if not entity_ids:
+            raise ValueError("entity_ids and tokenized_labels must not be empty.")
+
+        self._model.index(tokenized_labels, show_progress=False)
         self._entity_ids = list(entity_ids)
         self._is_fitted = True
 
     def retrieve(self, query_text: str, k: int) -> list[tuple[str, float]]:
         """Retrieve top-k candidates as (entity_id, similarity_score)."""
+        query_tokens = preprocess_text(query_text)
+        return self.retrieve_tokenized(query_tokens, k)
+
+    def retrieve_tokenized(self, query_tokens: list[str], k: int) -> list[tuple[str, float]]:
+        """Retrieve top-k candidates using an already-tokenized query."""
         if not self._is_fitted or not self._entity_ids:
             raise ValueError(
                 "Retriever is not fitted. Call fit(...) before retrieve(...)."
@@ -37,7 +51,6 @@ class Bm25Retriever:
             raise ValueError("k must be a positive integer.")
 
         candidate_count = min(k, len(self._entity_ids))
-        query_tokens = preprocess_text(query_text)
         documents, scores = self._model.retrieve(
             [query_tokens], k=candidate_count, show_progress=False, return_as="tuple"
         )

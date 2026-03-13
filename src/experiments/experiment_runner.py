@@ -11,13 +11,14 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, cast
 
 from pyoxigraph import NamedNode, RdfFormat, Store
 from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.preprocessing.text_preprocessor import preprocess_text
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
@@ -31,7 +32,9 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "dataset",
     "method",
     "hyperparameters",
+    "gold_count",
     "candidate_size",
+    "dataset_prep_seconds",
     "mrr",
     "runtime_seconds",
 )
@@ -53,6 +56,9 @@ class ExperimentResultRecord(TypedDict):
     num_source_entities: int
     num_target_entities: int
     num_gold_pairs: int
+    gold_count: int
+    candidate_size: int
+    dataset_prep_seconds: float
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
@@ -100,11 +106,17 @@ def _build_labels(store: Store, entity_ids: list[str]) -> list[str]:
     return [extract_entity_label(store, uri) for uri in entity_ids]
 
 
+def _preprocess_labels(labels: list[str]) -> tuple[list[list[str]], list[str]]:
+    tokenized = [preprocess_text(label) for label in labels]
+    joined = [" ".join(tokens) for tokens in tokenized]
+    return tokenized, joined
+
+
 def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
     return [
-        *FIXED_CSV_COLUMNS[:6],
+        *FIXED_CSV_COLUMNS[:8],
         *(f"recall_at_{k}" for k in evaluation_ks),
-        *FIXED_CSV_COLUMNS[6:],
+        *FIXED_CSV_COLUMNS[8:],
     ]
 
 
@@ -112,7 +124,6 @@ def _persist_results_to_csv(
     results: list[ExperimentResultRecord], output_csv_path: str | Path, evaluation_ks: list[int]
 ) -> None:
     csv_columns = _build_csv_columns(evaluation_ks)
-    candidate_size = max(evaluation_ks)
     output_path = Path(output_csv_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -128,7 +139,9 @@ def _persist_results_to_csv(
                 "hyperparameters": json.dumps(
                     record["hyperparameters"], sort_keys=True, separators=(",", ":")
                 ),
-                "candidate_size": candidate_size,
+                "gold_count": record["gold_count"],
+                "candidate_size": record["candidate_size"],
+                "dataset_prep_seconds": record["dataset_prep_seconds"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
             }
@@ -249,6 +262,7 @@ def run_experiments(
         dataset = datasets[dataset_name]
         datasets_processed += 1
         try:
+            dataset_prep_start = time.perf_counter()
             logger.info(
                 "Processing dataset '%s' (track=%s, version=%s)",
                 dataset_name,
@@ -306,7 +320,24 @@ def run_experiments(
             target_labels = _build_labels(target_store, target_entities)
             eval_sources = sorted(gold_filtered.keys())
             source_labels = _build_labels(source_store, eval_sources)
-            source_label_map = dict(zip(eval_sources, source_labels, strict=True))
+
+            target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
+            source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
+            source_label_preprocessed_map = dict(
+                zip(eval_sources, source_labels_preprocessed, strict=True)
+            )
+            source_token_map = dict(zip(eval_sources, source_tokens, strict=True))
+            candidate_size = min(k_max, len(target_entities))
+            gold_count = len(gold_filtered)
+            dataset_prep_seconds = time.perf_counter() - dataset_prep_start
+
+            logger.info(
+                "Dataset '%s' shared preprocessing completed in %.4fs (gold_count=%d, candidate_size=%d)",
+                dataset_name,
+                dataset_prep_seconds,
+                gold_count,
+                candidate_size,
+            )
 
             model_iterator = tqdm(
                 model_runs,
@@ -322,7 +353,17 @@ def run_experiments(
                         run.hyperparameters,
                         dataset_name,
                     )
-                    run.retriever.fit(target_entities, target_labels)
+                    if run.model_name == "tfidf":
+                        tfidf_retriever = cast(TfidfRetriever, run.retriever)
+                        tfidf_retriever.fit_preprocessed(
+                            target_entities, target_labels_preprocessed
+                        )
+                    elif run.model_name == "bm25":
+                        bm25_retriever = cast(Bm25Retriever, run.retriever)
+                        bm25_retriever.fit_tokenized(target_entities, target_tokens)
+                    else:
+                        raise ValueError(f"Unsupported model type: {run.model_name}")
+
                     predictions: dict[str, list[tuple[str, float]]] = {}
                     source_iterator = tqdm(
                         eval_sources,
@@ -331,9 +372,16 @@ def run_experiments(
                         leave=False,
                     )
                     for source_id in source_iterator:
-                        predictions[source_id] = run.retriever.retrieve(
-                            source_label_map[source_id], k=k_max
-                        )
+                        if run.model_name == "tfidf":
+                            tfidf_retriever = cast(TfidfRetriever, run.retriever)
+                            predictions[source_id] = tfidf_retriever.retrieve_preprocessed(
+                                source_label_preprocessed_map[source_id], k=k_max
+                            )
+                        else:
+                            bm25_retriever = cast(Bm25Retriever, run.retriever)
+                            predictions[source_id] = bm25_retriever.retrieve_tokenized(
+                                source_token_map[source_id], k=k_max
+                            )
 
                     raw_recalls, mrr = compute_recall_at_ks_and_mrr(
                         predictions, gold_filtered, evaluation_ks
@@ -348,6 +396,9 @@ def run_experiments(
                         "num_source_entities": len(source_entities),
                         "num_target_entities": len(target_entities),
                         "num_gold_pairs": len(gold_filtered),
+                        "gold_count": gold_count,
+                        "candidate_size": candidate_size,
+                        "dataset_prep_seconds": dataset_prep_seconds,
                         "recalls": recalls,
                         "mrr": mrr,
                         "runtime_seconds": time.perf_counter() - run_start,

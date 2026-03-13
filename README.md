@@ -377,6 +377,8 @@ Result fields (per run, in-memory):
 - `dataset_name`, `track`, `version`
 - `model`, `hyperparameters`
 - `num_source_entities`, `num_target_entities`, `num_gold_pairs`
+- `gold_count`, `candidate_size`
+- `dataset_prep_seconds` (shared per-dataset preprocessing time)
 - `recalls` (`dict[int, float]` for configured `evaluation_ks`), `mrr`, `runtime_seconds`
 
 CSV output columns:
@@ -386,10 +388,12 @@ CSV output columns:
 - `dataset`
 - `method`
 - `hyperparameters` (JSON string, sorted keys)
-- `candidate_size` (`max(evaluation_ks)`)
+- `gold_count` (filtered gold mappings used for evaluation)
+- `candidate_size` (`min(max(evaluation_ks), num_target_entities)`)
+- `dataset_prep_seconds` (dataset-level shared preprocessing)
 - dynamic `recall_at_<k>` columns in the same order as `evaluation_ks`
 - `mrr`
-- `runtime_seconds` (per dataset+method+hyperparameter run)
+- `runtime_seconds` (model-specific index+retrieve+evaluate time)
 
 Example:
 

@@ -36,11 +36,25 @@ class TfidfRetriever:
             raise ValueError("entity_ids and labels must not be empty.")
 
         processed_labels = [" ".join(preprocess_text(label)) for label in labels]
-        self._matrix = self._vectorizer.fit_transform(processed_labels)
+        self.fit_preprocessed(entity_ids, processed_labels)
+
+    def fit_preprocessed(self, entity_ids: list[str], preprocessed_labels: list[str]) -> None:
+        """Fit TF-IDF index from already-preprocessed labels."""
+        if len(entity_ids) != len(preprocessed_labels):
+            raise ValueError("entity_ids and preprocessed_labels must have the same length.")
+        if not entity_ids:
+            raise ValueError("entity_ids and preprocessed_labels must not be empty.")
+
+        self._matrix = self._vectorizer.fit_transform(preprocessed_labels)
         self._entity_ids = list(entity_ids)
 
     def retrieve(self, query_text: str, k: int) -> list[tuple[str, float]]:
         """Retrieve top-k candidates as (entity_id, similarity_score)."""
+        query_processed = " ".join(preprocess_text(query_text))
+        return self.retrieve_preprocessed(query_processed, k)
+
+    def retrieve_preprocessed(self, query_text: str, k: int) -> list[tuple[str, float]]:
+        """Retrieve top-k candidates using an already-preprocessed query string."""
         if self._matrix is None or not self._entity_ids:
             raise ValueError(
                 "Retriever is not fitted. Call fit(...) before retrieve(...)."
@@ -48,8 +62,7 @@ class TfidfRetriever:
         if k <= 0:
             raise ValueError("k must be a positive integer.")
 
-        query_processed = " ".join(preprocess_text(query_text))
-        query_vector = self._vectorizer.transform([query_processed])
+        query_vector = self._vectorizer.transform([query_text])
 
         # L2-normalized TF-IDF vectors make linear kernel equivalent to cosine similarity.
         scores = linear_kernel(query_vector, self._matrix).ravel()

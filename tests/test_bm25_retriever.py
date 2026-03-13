@@ -38,6 +38,17 @@ class Bm25RetrieverTests(unittest.TestCase):
 
         self.assertEqual(results[0][0], "e1")
 
+    def test_tokenized_entrypoints(self) -> None:
+        retriever = Bm25Retriever()
+        retriever.fit_tokenized(
+            ["e1", "e2"],
+            [["plant", "height", "value"], ["leaf", "color"]],
+        )
+
+        results = retriever.retrieve_tokenized(["plant", "height", "value"], k=1)
+
+        self.assertEqual(results[0][0], "e1")
+
     def test_retrieve_before_fit_raises(self) -> None:
         retriever = Bm25Retriever()
         with self.assertRaises(ValueError):
