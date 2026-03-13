@@ -600,3 +600,7 @@ Test command:
 ```bash
 ./venv/bin/python -m unittest tests/test_experiment_runner.py -v
 ```
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
