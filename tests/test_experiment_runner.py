@@ -88,8 +88,34 @@ def _alignment_rdf() -> str:
 """
 
 
+def _default_experiments_yaml() -> str:
+    return """
+experiments:
+  evaluation_ks: [1, 5, 10, 20, 50]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+    - ngram_range: [1, 2]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: true
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+    - k1: 1.2
+      b: 0.75
+"""
+
+
 class ExperimentRunnerTests(unittest.TestCase):
-    def _write_fixture_dataset(self, tmp: Path) -> Path:
+    def _write_fixture_dataset(
+        self,
+        tmp: Path,
+        experiments_yaml: str | None = None,
+        include_experiments: bool = True,
+    ) -> Path:
         source_path = tmp / "source.rdf"
         target_path = tmp / "target.rdf"
         alignment_path = tmp / "alignment.rdf"
@@ -97,8 +123,7 @@ class ExperimentRunnerTests(unittest.TestCase):
         target_path.write_text(_target_rdf(), encoding="utf-8")
         alignment_path.write_text(_alignment_rdf(), encoding="utf-8")
 
-        config_path = tmp / "datasets.yaml"
-        config_path.write_text(
+        config_body = (
             f"""
 datasets:
   fixture_dataset:
@@ -108,9 +133,14 @@ datasets:
     target_rdf: {target_path}
     alignment_rdf: {alignment_path}
 """.strip()
-            + "\n",
-            encoding="utf-8",
+            + "\n"
         )
+
+        if include_experiments:
+            config_body += "\n" + (experiments_yaml or _default_experiments_yaml()).strip() + "\n"
+
+        config_path = tmp / "datasets.yaml"
+        config_path.write_text(config_body, encoding="utf-8")
         return config_path
 
     def test_runner_executes_and_returns_expected_shape_and_writes_csv(self) -> None:
@@ -138,11 +168,7 @@ datasets:
                 "num_source_entities",
                 "num_target_entities",
                 "num_gold_pairs",
-                "recall_at_1",
-                "recall_at_5",
-                "recall_at_10",
-                "recall_at_20",
-                "recall_at_50",
+                "recalls",
                 "mrr",
                 "runtime_seconds",
             ):
@@ -152,18 +178,16 @@ datasets:
             self.assertEqual(row["num_target_entities"], 3)  # owl:Class only
             self.assertEqual(row["num_gold_pairs"], 2)  # non-class mapping filtered out
 
-            for metric_key in (
-                "recall_at_1",
-                "recall_at_5",
-                "recall_at_10",
-                "recall_at_20",
-                "recall_at_50",
-                "mrr",
-            ):
-                metric_value = row[metric_key]
-                self.assertIsInstance(metric_value, float)
-                self.assertGreaterEqual(metric_value, 0.0)
-                self.assertLessEqual(metric_value, 1.0)
+            recalls = row["recalls"]
+            self.assertEqual(list(recalls.keys()), [1, 5, 10, 20, 50])
+            for recall_value in recalls.values():
+                self.assertIsInstance(recall_value, float)
+                self.assertGreaterEqual(recall_value, 0.0)
+                self.assertLessEqual(recall_value, 1.0)
+
+            self.assertIsInstance(row["mrr"], float)
+            self.assertGreaterEqual(row["mrr"], 0.0)
+            self.assertLessEqual(row["mrr"], 1.0)
             self.assertGreaterEqual(row["runtime_seconds"], 0.0)
 
     def test_csv_schema_and_serialization(self) -> None:
@@ -204,6 +228,117 @@ datasets:
             json.loads(row["hyperparameters"])
             runtime_seconds = float(row["runtime_seconds"])
             self.assertGreaterEqual(runtime_seconds, 0.0)
+
+    def test_runner_uses_yaml_defined_ks_and_grid_order(self) -> None:
+        custom_experiments = """
+experiments:
+  evaluation_ks: [2, 4]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+"""
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(
+                Path(tmpdir), experiments_yaml=custom_experiments
+            )
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(
+                config_path=config_path, output_csv_path=output_csv_path
+            )
+
+            with output_csv_path.open("r", encoding="utf-8", newline="") as csv_file:
+                reader = csv.DictReader(csv_file)
+                fieldnames = reader.fieldnames
+                rows = list(reader)
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual([row["model"] for row in results], ["tfidf", "bm25"])
+        for row in results:
+            self.assertEqual(list(row["recalls"].keys()), [2, 4])
+
+        self.assertEqual(
+            fieldnames,
+            [
+                "track",
+                "version",
+                "dataset",
+                "method",
+                "hyperparameters",
+                "candidate_size",
+                "recall_at_2",
+                "recall_at_4",
+                "mrr",
+                "runtime_seconds",
+            ],
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row["candidate_size"] == "4" for row in rows))
+
+    def test_runner_fails_fast_for_invalid_experiment_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(
+                Path(tmpdir), include_experiments=False
+            )
+            with patch.object(experiment_runner_module, "_load_store_with_fallback") as loader:
+                with self.assertRaisesRegex(ValueError, "'experiments' mapping"):
+                    run_experiments(config_path=config_path)
+                loader.assert_not_called()
+
+    def test_runner_preserves_yaml_dataset_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_path = tmp / "source.rdf"
+            target_path = tmp / "target.rdf"
+            alignment_path = tmp / "alignment.rdf"
+            source_path.write_text(_source_rdf(), encoding="utf-8")
+            target_path.write_text(_target_rdf(), encoding="utf-8")
+            alignment_path.write_text(_alignment_rdf(), encoding="utf-8")
+
+            config_path = tmp / "datasets.yaml"
+            config_path.write_text(
+                f"""
+datasets:
+  z_dataset:
+    track: fixture_track
+    version: "v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+  a_dataset:
+    track: fixture_track
+    version: "v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+experiments:
+  evaluation_ks: [1]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            output_csv_path = tmp / "results" / "experiment_results.csv"
+            results = run_experiments(
+                config_path=config_path, output_csv_path=output_csv_path
+            )
+
+        self.assertEqual(
+            [row["dataset_name"] for row in results],
+            ["z_dataset", "z_dataset", "a_dataset", "a_dataset"],
+        )
 
     def test_best_effort_writes_successful_rows_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

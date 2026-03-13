@@ -73,6 +73,22 @@ datasets:
     source_rdf: {source_path}
     target_rdf: {target_path}
     alignment_rdf: {alignment_path}
+experiments:
+  evaluation_ks: [1, 5, 10, 20, 50]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+    - ngram_range: [1, 2]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: true
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+    - k1: 1.2
+      b: 0.75
 """.strip()
             + "\n",
             encoding="utf-8",

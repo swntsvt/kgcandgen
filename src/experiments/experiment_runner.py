@@ -16,7 +16,7 @@ from typing import Protocol, TypedDict
 from pyoxigraph import NamedNode, RdfFormat, Store
 from tqdm import tqdm
 
-from src.config_loader import load_datasets_config
+from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
@@ -25,19 +25,13 @@ from src.retrieval.tfidf_retriever import TfidfRetriever
 
 RDF_TYPE = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
 OWL_CLASS = NamedNode("http://www.w3.org/2002/07/owl#Class")
-EVAL_KS: tuple[int, ...] = (1, 5, 10, 20, 50)
-CSV_COLUMNS: tuple[str, ...] = (
+FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "track",
     "version",
     "dataset",
     "method",
     "hyperparameters",
     "candidate_size",
-    "recall_at_1",
-    "recall_at_5",
-    "recall_at_10",
-    "recall_at_20",
-    "recall_at_50",
     "mrr",
     "runtime_seconds",
 )
@@ -59,11 +53,7 @@ class ExperimentResultRecord(TypedDict):
     num_source_entities: int
     num_target_entities: int
     num_gold_pairs: int
-    recall_at_1: float
-    recall_at_5: float
-    recall_at_10: float
-    recall_at_20: float
-    recall_at_50: float
+    recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
 
@@ -76,33 +66,11 @@ class ExperimentErrorRecord(TypedDict):
     error: str
 
 
-class TfidfHyperparameters(TypedDict):
-    ngram_range: tuple[int, int]
-    min_df: int | float
-    max_df: int | float
-    sublinear_tf: bool
-
-
-class Bm25Hyperparameters(TypedDict):
-    k1: float
-    b: float
-
-
 @dataclass(frozen=True)
 class ModelRunSpec:
     model_name: str
     hyperparameters: dict[str, object]
     retriever: RetrieverProtocol
-
-
-TFIDF_GRID: tuple[TfidfHyperparameters, ...] = (
-    {"ngram_range": (1, 1), "min_df": 1, "max_df": 1.0, "sublinear_tf": False},
-    {"ngram_range": (1, 2), "min_df": 1, "max_df": 1.0, "sublinear_tf": True},
-)
-BM25_GRID: tuple[Bm25Hyperparameters, ...] = (
-    {"k1": 1.5, "b": 0.75},
-    {"k1": 1.2, "b": 0.75},
-)
 
 
 def _load_store_with_fallback(path: Path) -> Store:
@@ -132,35 +100,41 @@ def _build_labels(store: Store, entity_ids: list[str]) -> list[str]:
     return [extract_entity_label(store, uri) for uri in entity_ids]
 
 
+def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
+    return [
+        *FIXED_CSV_COLUMNS[:6],
+        *(f"recall_at_{k}" for k in evaluation_ks),
+        *FIXED_CSV_COLUMNS[6:],
+    ]
+
+
 def _persist_results_to_csv(
-    results: list[ExperimentResultRecord], output_csv_path: str | Path
+    results: list[ExperimentResultRecord], output_csv_path: str | Path, evaluation_ks: list[int]
 ) -> None:
+    csv_columns = _build_csv_columns(evaluation_ks)
+    candidate_size = max(evaluation_ks)
     output_path = Path(output_csv_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with output_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=CSV_COLUMNS)
+        writer = csv.DictWriter(csv_file, fieldnames=csv_columns)
         writer.writeheader()
         for record in results:
-            writer.writerow(
-                {
-                    "track": record["track"],
-                    "version": record["version"],
-                    "dataset": record["dataset_name"],
-                    "method": record["model"],
-                    "hyperparameters": json.dumps(
-                        record["hyperparameters"], sort_keys=True, separators=(",", ":")
-                    ),
-                    "candidate_size": max(EVAL_KS),
-                    "recall_at_1": record["recall_at_1"],
-                    "recall_at_5": record["recall_at_5"],
-                    "recall_at_10": record["recall_at_10"],
-                    "recall_at_20": record["recall_at_20"],
-                    "recall_at_50": record["recall_at_50"],
-                    "mrr": record["mrr"],
-                    "runtime_seconds": record["runtime_seconds"],
-                }
-            )
+            row: dict[str, object] = {
+                "track": record["track"],
+                "version": record["version"],
+                "dataset": record["dataset_name"],
+                "method": record["model"],
+                "hyperparameters": json.dumps(
+                    record["hyperparameters"], sort_keys=True, separators=(",", ":")
+                ),
+                "candidate_size": candidate_size,
+                "mrr": record["mrr"],
+                "runtime_seconds": record["runtime_seconds"],
+            }
+            for k in evaluation_ks:
+                row[f"recall_at_{k}"] = record["recalls"][k]
+            writer.writerow(row)
 
 
 def _get_git_short_sha() -> str:
@@ -182,6 +156,48 @@ def _default_output_csv_path() -> Path:
     return Path("results") / f"result_{timestamp}_{git_sha}.csv"
 
 
+def _build_tfidf_model_run(params: TfidfGridEntry) -> ModelRunSpec:
+    return ModelRunSpec(
+        model_name="tfidf",
+        hyperparameters={
+            "ngram_range": params.ngram_range,
+            "min_df": params.min_df,
+            "max_df": params.max_df,
+            "sublinear_tf": params.sublinear_tf,
+        },
+        retriever=TfidfRetriever(
+            ngram_range=params.ngram_range,
+            min_df=params.min_df,
+            max_df=params.max_df,
+            sublinear_tf=params.sublinear_tf,
+        ),
+    )
+
+
+def _build_bm25_model_run(params: Bm25GridEntry) -> ModelRunSpec:
+    return ModelRunSpec(
+        model_name="bm25",
+        hyperparameters={"k1": params.k1, "b": params.b},
+        retriever=Bm25Retriever(k1=params.k1, b=params.b),
+    )
+
+
+def _build_model_runs(
+    tfidf_grid: list[TfidfGridEntry], bm25_grid: list[Bm25GridEntry]
+) -> list[ModelRunSpec]:
+    model_runs: list[ModelRunSpec] = []
+    for params in tfidf_grid:
+        model_runs.append(_build_tfidf_model_run(params))
+    for params in bm25_grid:
+        model_runs.append(_build_bm25_model_run(params))
+    return model_runs
+
+
+def _format_recall_for_log(recalls: dict[int, float], evaluation_ks: list[int]) -> tuple[str, float]:
+    recall_k = 10 if 10 in recalls else evaluation_ks[0]
+    return f"recall@{recall_k}", recalls[recall_k]
+
+
 def run_experiments(
     config_path: str | Path = "config/datasets.yaml",
     output_csv_path: str | Path | None = None,
@@ -192,23 +208,38 @@ def run_experiments(
     resolved_output_csv_path = (
         Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
     )
+
+    runtime_config = load_runtime_config(config_path=config_path)
+    datasets = runtime_config.datasets
+    evaluation_ks = runtime_config.experiments.evaluation_ks
+    k_max = max(evaluation_ks)
+    model_runs = _build_model_runs(
+        runtime_config.experiments.tfidf_grid, runtime_config.experiments.bm25_grid
+    )
+
     logger.info(
         "Starting experiment run with config: %s (output_csv_path=%s, progress=%s)",
         config_path,
         resolved_output_csv_path,
         progress_enabled,
     )
-    datasets = load_datasets_config(config_path=config_path)
-    logger.info("Loaded %d dataset(s) from config", len(datasets))
+    logger.info(
+        "Loaded %d dataset(s) from config with evaluation_ks=%s, tfidf_grid=%d, bm25_grid=%d",
+        len(datasets),
+        evaluation_ks,
+        len(runtime_config.experiments.tfidf_grid),
+        len(runtime_config.experiments.bm25_grid),
+    )
+
     results: list[ExperimentResultRecord] = []
     errors: list[ExperimentErrorRecord] = []
-    k_max = max(EVAL_KS)
     datasets_processed = 0
     successful_model_runs = 0
     failed_model_runs = 0
     dataset_failures = 0
 
-    dataset_names = sorted(datasets.keys())
+    # Preserve YAML-defined dataset order for deterministic, config-driven execution.
+    dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
         desc="Datasets",
@@ -276,28 +307,6 @@ def run_experiments(
             eval_sources = sorted(gold_filtered.keys())
             source_labels = _build_labels(source_store, eval_sources)
             source_label_map = dict(zip(eval_sources, source_labels, strict=True))
-            model_runs: list[ModelRunSpec] = []
-            for params in TFIDF_GRID:
-                model_runs.append(
-                    ModelRunSpec(
-                        "tfidf",
-                        dict(params),
-                        TfidfRetriever(
-                            ngram_range=params["ngram_range"],
-                            min_df=params["min_df"],
-                            max_df=params["max_df"],
-                            sublinear_tf=params["sublinear_tf"],
-                        ),
-                    )
-                )
-            for params in BM25_GRID:
-                model_runs.append(
-                    ModelRunSpec(
-                        "bm25",
-                        dict(params),
-                        Bm25Retriever(k1=params["k1"], b=params["b"]),
-                    )
-                )
 
             model_iterator = tqdm(
                 model_runs,
@@ -326,9 +335,10 @@ def run_experiments(
                             source_label_map[source_id], k=k_max
                         )
 
-                    recalls, mrr = compute_recall_at_ks_and_mrr(
-                        predictions, gold_filtered, EVAL_KS
+                    raw_recalls, mrr = compute_recall_at_ks_and_mrr(
+                        predictions, gold_filtered, evaluation_ks
                     )
+                    recalls = {k: raw_recalls[k] for k in evaluation_ks}
                     result_record: ExperimentResultRecord = {
                         "dataset_name": dataset.name,
                         "track": dataset.track,
@@ -338,22 +348,20 @@ def run_experiments(
                         "num_source_entities": len(source_entities),
                         "num_target_entities": len(target_entities),
                         "num_gold_pairs": len(gold_filtered),
-                        "recall_at_1": recalls[1],
-                        "recall_at_5": recalls[5],
-                        "recall_at_10": recalls[10],
-                        "recall_at_20": recalls[20],
-                        "recall_at_50": recalls[50],
+                        "recalls": recalls,
                         "mrr": mrr,
                         "runtime_seconds": time.perf_counter() - run_start,
                     }
                     results.append(result_record)
                     successful_model_runs += 1
+                    recall_label, recall_value = _format_recall_for_log(recalls, evaluation_ks)
                     logger.info(
-                        "Completed run model=%s dataset='%s' mrr=%.4f recall@10=%.4f runtime=%.4fs",
+                        "Completed run model=%s dataset='%s' mrr=%.4f %s=%.4f runtime=%.4fs",
                         run.model_name,
                         dataset_name,
                         result_record["mrr"],
-                        result_record["recall_at_10"],
+                        recall_label,
+                        recall_value,
                         result_record["runtime_seconds"],
                     )
                 except Exception as exc:
@@ -391,7 +399,11 @@ def run_experiments(
             continue
 
     try:
-        _persist_results_to_csv(results, output_csv_path=resolved_output_csv_path)
+        _persist_results_to_csv(
+            results,
+            output_csv_path=resolved_output_csv_path,
+            evaluation_ks=evaluation_ks,
+        )
         logger.info(
             "Persisted %d result record(s) to %s",
             len(results),

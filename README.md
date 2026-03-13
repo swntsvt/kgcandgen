@@ -44,6 +44,23 @@ Then edit `config/datasets.yaml` with your local RDF and alignment file paths.
 Expected schema:
 
 ```yaml
+experiments:
+  evaluation_ks: [1, 5, 10, 20, 50]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+    - ngram_range: [1, 2]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: true
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+    - k1: 1.2
+      b: 0.75
+
 datasets:
   <dataset_name>:
     track: <track_name>
@@ -337,12 +354,12 @@ Public API:
 
 What it does:
 
-1. Loads datasets from `config/datasets.yaml`.
+1. Loads datasets and experiment settings from `config/datasets.yaml`.
 2. Loads source/target RDF with strict-then-lenient RDF/XML fallback.
 3. Selects only `owl:Class` entities from both graphs.
 4. Extracts labels and parses/filter gold alignments.
-5. Runs TF-IDF and BM25 hyperparameter configurations.
-6. Computes `Recall@1/5/10/20/50` and `MRR`.
+5. Runs TF-IDF and BM25 hyperparameter configurations from YAML.
+6. Computes `Recall@k` for configured `evaluation_ks` values and `MRR`.
 7. Writes CSV output to a run-stamped file by default:
    `results/result_YYYYMMDD_HHMMSS_<gitsha>.csv`.
    If `output_csv_path` is provided, that exact path is used (overwrite mode).
@@ -360,7 +377,7 @@ Result fields (per run, in-memory):
 - `dataset_name`, `track`, `version`
 - `model`, `hyperparameters`
 - `num_source_entities`, `num_target_entities`, `num_gold_pairs`
-- `recall_at_1`, `recall_at_5`, `recall_at_10`, `recall_at_20`, `recall_at_50`, `mrr`, `runtime_seconds`
+- `recalls` (`dict[int, float]` for configured `evaluation_ks`), `mrr`, `runtime_seconds`
 
 CSV output columns:
 
@@ -369,12 +386,8 @@ CSV output columns:
 - `dataset`
 - `method`
 - `hyperparameters` (JSON string, sorted keys)
-- `candidate_size` (currently `50`)
-- `recall_at_1`
-- `recall_at_5`
-- `recall_at_10`
-- `recall_at_20`
-- `recall_at_50`
+- `candidate_size` (`max(evaluation_ks)`)
+- dynamic `recall_at_<k>` columns in the same order as `evaluation_ks`
 - `mrr`
 - `runtime_seconds` (per dataset+method+hyperparameter run)
 
