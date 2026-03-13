@@ -367,6 +367,21 @@ experiments:
         # 3 target labels + 2 evaluated source labels; should not scale with model count.
         self.assertEqual(preprocess_mock.call_count, 5)
 
+    def test_runner_does_not_attempt_nltk_download(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            with patch(
+                "src.preprocessing.text_preprocessor.nltk.download",
+                side_effect=AssertionError("nltk.download must not be called"),
+            ) as download_mock:
+                results = run_experiments(
+                    config_path=config_path, output_csv_path=output_csv_path
+                )
+
+        self.assertEqual(len(results), 4)
+        download_mock.assert_not_called()
+
     def test_best_effort_writes_successful_rows_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_fixture_dataset(Path(tmpdir))

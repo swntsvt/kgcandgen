@@ -190,8 +190,14 @@ tokens = preprocess_text("The PlantHeightValue, of LeafSize!")
 
 NLTK resources:
 
-- The preprocessor checks required NLTK resources (`punkt`, `punkt_tab`, `stopwords`).
-- If missing, it auto-downloads them at runtime.
+- Required English-only assets are bundled in-repo under `resources/nltk_data/`:
+  - `tokenizers/punkt/english.pickle`
+  - `tokenizers/punkt_tab/english/`
+  - `corpora/stopwords/english`
+- The preprocessor validates these local assets before use and does not download at runtime.
+- The bundled path is prepended to `nltk.data.path`, so project-managed assets are used first.
+- If assets are missing/corrupt, preprocessing fails fast with an actionable error that includes
+  missing resource names and expected local paths.
 
 ## TF-IDF Retrieval
 

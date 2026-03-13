@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
-from src.preprocessing.text_preprocessor import preprocess_text
+from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
@@ -217,6 +217,7 @@ def run_experiments(
     show_progress: bool | None = None,
 ) -> list[ExperimentResultRecord]:
     """Run retrieval experiments over datasets and hyperparameter grids."""
+    validate_nltk_assets()
     progress_enabled = sys.stderr.isatty() if show_progress is None else show_progress
     resolved_output_csv_path = (
         Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()

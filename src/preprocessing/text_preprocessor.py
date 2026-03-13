@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import re
 import string
 
@@ -10,23 +11,59 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 
 _NLTK_RESOURCES_READY = False
+_PROJECT_NLTK_DATA_DIR = Path(__file__).resolve().parents[2] / "resources" / "nltk_data"
+_REQUIRED_NLTK_RESOURCES: tuple[tuple[str, str], ...] = (
+    ("tokenizers/punkt/english.pickle", "punkt"),
+    ("tokenizers/punkt_tab/english", "punkt_tab"),
+    ("corpora/stopwords/english", "stopwords"),
+)
 
 
-def _ensure_nltk_resources() -> None:
+def _ensure_project_nltk_path() -> None:
+    project_path = str(_PROJECT_NLTK_DATA_DIR)
+    remaining_paths = [path for path in nltk.data.path if path != project_path]
+    nltk.data.path[:] = [project_path, *remaining_paths]
+
+
+def validate_nltk_assets() -> None:
+    """Validate that required bundled NLTK assets are available locally."""
     global _NLTK_RESOURCES_READY
+    _ensure_project_nltk_path()
+
     if _NLTK_RESOURCES_READY:
         return
 
-    resources = (
-        ("tokenizers/punkt", "punkt"),
-        ("tokenizers/punkt_tab", "punkt_tab"),
-        ("corpora/stopwords", "stopwords"),
-    )
-    for path, package in resources:
+    missing_entries: list[str] = []
+    for resource_path, package_name in _REQUIRED_NLTK_RESOURCES:
         try:
-            nltk.data.find(path)
-        except LookupError:
-            nltk.download(package, quiet=True)
+            nltk.data.find(resource_path)
+        except (LookupError, OSError) as exc:
+            expected_path = _PROJECT_NLTK_DATA_DIR / resource_path
+            missing_entries.append(
+                f"- package='{package_name}', resource='{resource_path}', expected_at='{expected_path}' ({type(exc).__name__})"
+            )
+
+    if missing_entries:
+        details = "\n".join(missing_entries)
+        raise RuntimeError(
+            "Required bundled NLTK resources are missing or unreadable.\n"
+            f"Checked project data directory: {_PROJECT_NLTK_DATA_DIR}\n"
+            "Missing resources:\n"
+            f"{details}\n"
+            "Restore the bundled files under resources/nltk_data before running preprocessing."
+        )
+
+    # Verify assets are loadable, not just present on disk.
+    try:
+        _ = stopwords.words("english")
+        _ = word_tokenize("validation")
+    except (LookupError, OSError, ValueError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            "Bundled NLTK resources are present but unreadable/corrupt.\n"
+            f"Checked project data directory: {_PROJECT_NLTK_DATA_DIR}\n"
+            f"Validation failure: {type(exc).__name__}: {exc}\n"
+            "Restore the bundled files under resources/nltk_data before running preprocessing."
+        ) from exc
 
     _NLTK_RESOURCES_READY = True
 
@@ -39,7 +76,7 @@ def _split_camel_case(text: str) -> str:
 
 def preprocess_text(text: str) -> list[str]:
     """Normalize and tokenize text for lexical retrieval models."""
-    _ensure_nltk_resources()
+    validate_nltk_assets()
 
     camel_split = _split_camel_case(text).lower()
     separator_normalized = re.sub(r"[-_/]+", " ", camel_split)
