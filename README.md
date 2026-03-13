@@ -19,6 +19,18 @@ Install dependencies:
 python -m pip install -r requirements.txt
 ```
 
+## Experimental Hardware
+
+The reported experiment runs in this repository were generated on:
+
+- Machine: Mac mini
+- Chip: Apple M4 Pro
+- Memory: 64 GB RAM
+- OS: macOS Tahoe 26.3.1
+- Python: 3.12.12
+- CPU cores: 12 total (8 Performance, 4 Efficiency)
+- No other heavy workloads were running concurrently
+
 ## Project Structure
 
 ```text
@@ -30,6 +42,75 @@ kgcandgen/
 ├── results/    # Experiment outputs
 └── data/       # Local datasets (ignored in git)
 ```
+
+## Methodology
+
+This project focuses on the **candidate generation stage** of KG alignment.
+
+Pipeline:
+
+```text
+dataset config
+  -> RDF load (source, target, alignment)
+  -> class filtering (owl:Class)
+  -> label extraction
+  -> text preprocessing
+  -> lexical retrieval (TF-IDF / BM25)
+  -> metric computation (Recall@k, MRR)
+  -> CSV result storage
+```
+
+Where methods fit:
+
+- **TF-IDF** and **BM25** are the candidate retrievers.
+- **Recall@k** and **MRR** are computed on ranked candidate lists produced per source entity.
+
+Mathematical definitions (LaTeX-ready):
+
+Full search space:
+
+$$
+|\mathcal{S}| \times |\mathcal{T}|
+$$
+
+Candidate search space after top-k retrieval:
+
+$$
+|\mathcal{S}_{eval}| \times \min(k_{\max}, |\mathcal{T}_{class}|)
+$$
+
+Gold filtering to class-level evaluation set:
+
+$$
+\mathcal{G}_f = \{(s,t) \in \mathcal{G}_{raw} \mid s \in \mathcal{S}_{class},\ t \in \mathcal{T}_{class}\}
+$$
+
+Recall@k:
+
+$$
+\text{Recall@}k = \frac{1}{|\mathcal{G}_f|} \sum_{s \in \text{dom}(\mathcal{G}_f)}
+\mathbf{1}\left[g(s) \in \text{TopK}(P_s, k)\right]
+$$
+
+MRR:
+
+$$
+\text{MRR} = \frac{1}{|\mathcal{G}_f|} \sum_{s \in \text{dom}(\mathcal{G}_f)}
+\begin{cases}
+\frac{1}{\text{rank}_s}, & \text{if } g(s) \text{ is retrieved} \\
+0, & \text{otherwise}
+\end{cases}
+$$
+
+Plain-text note: candidate list order is treated as rank order; missing prediction entries for a gold source contribute `0`.
+
+## Assumptions and Limitations
+
+- Gold alignments are evaluated as **1:1 source->target mappings** (`dict[source] -> target`).
+- If duplicate source mappings are present in alignment files, the first valid target is kept.
+- Dataset paths in config are expected to be **absolute paths** and must exist.
+- Source/target graph identity is inferred from dataset config naming (`dataset`, `track`, `version`) and is intentionally not duplicated as separate CSV identifier columns.
+- Concurrent near-simultaneous experiment runs are out of scope (default run-stamped filenames are not designed as a multi-writer coordination mechanism).
 
 ## Dataset Configuration
 
@@ -70,6 +151,24 @@ datasets:
     alignment_rdf: /absolute/path/to/alignment.rdf
 ```
 
+Config semantics and validation:
+
+- `experiments.evaluation_ks`:
+  - non-empty list of positive integers
+  - values must be unique
+  - order is preserved and used for output column order
+- `experiments.tfidf_grid`:
+  - non-empty list
+  - each entry requires `ngram_range`, `min_df`, `max_df`, `sublinear_tf`
+  - entries are executed in YAML order
+- `experiments.bm25_grid`:
+  - non-empty list
+  - each entry requires `k1`, `b`
+  - entries are executed in YAML order
+- `datasets.<name>`:
+  - requires `track`, `version`, `source_rdf`, `target_rdf`, `alignment_rdf`
+  - RDF/alignment file paths are validated for existence before run starts
+
 ## Testing
 
 Run tests:
@@ -91,31 +190,31 @@ Note: run tests in an environment where `requirements.txt` has been installed.
 Use the CLI entry point to run experiments across all datasets configured in YAML:
 
 ```bash
-python src/main.py
+python -m src.main
 ```
 
 With explicit config path:
 
 ```bash
-python src/main.py --config-path config/datasets.yaml
+python -m src.main --config-path config/datasets.yaml
 ```
 
 With explicit output CSV path:
 
 ```bash
-python src/main.py --output-csv-path results/my_run.csv
+python -m src.main --output-csv-path results/my_run.csv
 ```
 
 With progress bars forced on:
 
 ```bash
-python src/main.py --progress
+python -m src.main --progress
 ```
 
 With progress bars forced off:
 
 ```bash
-python src/main.py --no-progress
+python -m src.main --no-progress
 ```
 
 CLI behavior:
@@ -401,6 +500,29 @@ CSV output columns:
 - `mrr`
 - `runtime_seconds` (model-specific index+retrieve+evaluate time)
 
+Timing semantics:
+
+- `dataset_prep_seconds` is shared preprocessing time computed once per dataset and copied to each model row for that dataset:
+  - RDF load
+  - `owl:Class` extraction
+  - alignment parsing + filtering
+  - label extraction + shared text preprocessing
+- `runtime_seconds` is model-specific time only:
+  - retriever fit/index construction
+  - source retrieval loop
+  - metric computation
+
+Metadata semantics:
+
+- `gold_count = |\mathcal{G}_f|` (filtered gold used for evaluation).
+- `candidate_size = min(max(evaluation_ks), num_target_entities)`.
+
+Exact CSV order:
+
+`track,version,dataset,method,hyperparameters,gold_count,candidate_size,dataset_prep_seconds,recall_at_<k...>,mrr,runtime_seconds`
+
+The `recall_at_<k>` columns appear in the same order as `evaluation_ks` in YAML.
+
 Example:
 
 ```python
@@ -408,6 +530,56 @@ from src.experiments.experiment_runner import run_experiments
 
 results = run_experiments("config/datasets.yaml")
 ```
+
+## End-to-End Example (Config -> Run -> Result)
+
+Minimal example config:
+
+```yaml
+experiments:
+  evaluation_ks: [1, 5, 10]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+  bm25_grid:
+    - k1: 1.5
+      b: 0.75
+
+datasets:
+  conference_v1:
+    track: conference
+    version: "1"
+    source_rdf: /abs/path/source.rdf
+    target_rdf: /abs/path/target.rdf
+    alignment_rdf: /abs/path/alignment.rdf
+```
+
+Run:
+
+```bash
+python src/main.py --config-path config/datasets.yaml
+```
+
+CLI prints the generated file path:
+
+```text
+Results CSV: results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
+```
+
+Example header + row shape:
+
+```csv
+track,version,dataset,method,hyperparameters,gold_count,candidate_size,dataset_prep_seconds,recall_at_1,recall_at_5,recall_at_10,mrr,runtime_seconds
+conference,1,conference_v1,tfidf,"{\"max_df\":1.0,\"min_df\":1,\"ngram_range\":[1,1],\"sublinear_tf\":false}",120,50,1.2378,0.4417,0.7333,0.8083,0.5871,0.4216
+```
+
+Interpretation:
+
+- `dataset_prep_seconds` should be compared across datasets (shared setup complexity).
+- `runtime_seconds` should be compared across model/hyperparameter runs (retrieval/evaluation cost).
+- `dataset`, `track`, `version` identify the graph pair context; source/target IDs are intentionally not duplicated as separate CSV columns.
 
 Test command:
 
