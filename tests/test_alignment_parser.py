@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 
@@ -214,6 +215,85 @@ class AlignmentParserTests(unittest.TestCase):
                 "http://example.org/source#Third": "http://example.org/target#Third",
             },
         )
+
+    def test_cid_attribute_uses_rdflib_fallback(self) -> None:
+        rdf = """<?xml version='1.0' encoding='utf-8'?>
+<rdf:RDF xmlns='http://knowledgeweb.semanticweb.org/heterogeneity/alignment'
+         xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+         xmlns:xsd='http://www.w3.org/2001/XMLSchema#'>
+  <Alignment>
+    <map>
+      <Cell cid='1'>
+        <entity1 rdf:resource='http://example.org/source#A'/>
+        <entity2 rdf:resource='http://example.org/target#B'/>
+        <measure rdf:datatype='xsd:float'>1.0</measure>
+        <relation>=</relation>
+      </Cell>
+    </map>
+  </Alignment>
+</rdf:RDF>
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "alignment.rdf"
+            path.write_text(rdf, encoding="utf-8")
+
+            mappings = load_alignment_mappings(path)
+
+        self.assertEqual(
+            mappings, {"http://example.org/source#A": "http://example.org/target#B"}
+        )
+
+    def test_rdflib_fallback_when_pyoxigraph_fails(self) -> None:
+        rdf = """<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://knowledgeweb.semanticweb.org/heterogeneity/alignment">
+  <Alignment>
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#A"/>
+        <entity2 rdf:resource="http://example.org/target#B"/>
+        <relation>=</relation>
+      </Cell>
+    </map>
+  </Alignment>
+</rdf:RDF>
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "alignment.rdf"
+            path.write_text(rdf, encoding="utf-8")
+
+            with patch(
+                "src.rdf_utils.alignment_parser.parse",
+                side_effect=SyntaxError("forced pyoxigraph failure"),
+            ):
+                mappings = load_alignment_mappings(path)
+
+        self.assertEqual(
+            mappings, {"http://example.org/source#A": "http://example.org/target#B"}
+        )
+
+    def test_both_parsers_fail_raise_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "alignment.rdf"
+            path.write_text("not-rdf", encoding="utf-8")
+
+            with patch(
+                "src.rdf_utils.alignment_parser.parse",
+                side_effect=SyntaxError("forced pyoxigraph failure"),
+            ):
+                with patch(
+                    "src.rdf_utils.alignment_parser.Graph.parse",
+                    side_effect=SyntaxError("forced rdflib failure"),
+                ):
+                    with self.assertRaises(RuntimeError) as exc:
+                        load_alignment_mappings(path)
+
+        message = str(exc.exception)
+        self.assertIn("Failed to parse alignment RDF/XML", message)
+        self.assertIn(str(path), message)
+        self.assertIn("pyoxigraph_strict=", message)
+        self.assertIn("pyoxigraph_lenient=", message)
+        self.assertIn("rdflib=", message)
 
 
 if __name__ == "__main__":

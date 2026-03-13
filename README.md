@@ -258,12 +258,26 @@ This can cause strict RDF/XML parsing to fail with an error like:
 
 Fixes applied in `alignment_parser`:
 
-1. Strict-then-lenient parse fallback for RDF/XML.
+1. Parser backend fallback chain for alignment files:
+   - `pyoxigraph` strict RDF/XML
+   - `pyoxigraph` lenient RDF/XML
+   - `rdflib` RDF/XML fallback (only if both `pyoxigraph` attempts fail)
 2. Tolerant predicate matching for OAEI namespace variants (with and without `#`).
 3. Validation that mapped entities must be absolute HTTP(S) IRIs.
 4. Malformed cells are skipped instead of aborting the full parse.
 
-Result: real dataset parsing now succeeds and returns non-zero mappings for `flopo-pto`.
+Additional real-world case:
+
+- Some OAEI alignment files (for example `cmt-conference`) use non-standard XML attributes
+  like non-namespaced `cid` on `Cell`, which can break `pyoxigraph` parsing.
+- In those cases, `rdflib` fallback is used to recover mappings instead of failing the dataset.
+
+Scope note:
+
+- This fallback is currently for **alignment RDF parsing only**.
+- Source/target ontology loading remains on the existing `pyoxigraph` strict-then-lenient path.
+
+Result: dataset runs no longer fail due to these alignment parsing variants.
 
 ## Text Preprocessing
 

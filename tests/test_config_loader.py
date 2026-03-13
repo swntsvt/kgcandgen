@@ -304,6 +304,32 @@ experiments: []
             ):
                 load_runtime_config(config_path)
 
+    def test_bm25_k1_allows_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("k1: 1.5", "k1: 0.0", 1),
+                encoding="utf-8",
+            )
+
+            runtime = load_runtime_config(config_path)
+
+        self.assertEqual(runtime.experiments.bm25_grid[0].k1, 0.0)
+
+    def test_invalid_bm25_negative_k1_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("k1: 1.5", "k1: -0.1", 1),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "experiments.bm25_grid\\[0\\].k1 must be greater than or equal to 0",
+            ):
+                load_runtime_config(config_path)
+
 
 if __name__ == "__main__":
     unittest.main()

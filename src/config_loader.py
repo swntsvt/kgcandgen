@@ -245,8 +245,8 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
 
         k1 = float(_ensure_number(entry["k1"], f"{field}.k1"))
         b = float(_ensure_number(entry["b"], f"{field}.b"))
-        if k1 <= 0:
-            raise ValueError(f"{field}.k1 must be greater than 0.")
+        if k1 < 0:
+            raise ValueError(f"{field}.k1 must be greater than or equal to 0.")
         if b < 0 or b > 1:
             raise ValueError(f"{field}.b must be between 0 and 1.")
 
