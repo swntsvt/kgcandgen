@@ -271,6 +271,43 @@ Comparison views:
 
 `interpretation_scaffold.md` is a concise template to summarize what happened overall and by track.
 
+## TF-IDF Sensitivity Analysis
+
+Use the sensitivity command to analyze TF-IDF hyperparameter robustness and failure surface.
+
+With latest available result CSV (auto-detected):
+
+```bash
+python -m src.main tfidf-sensitivity
+```
+
+With explicit result CSV and config path:
+
+```bash
+python -m src.main tfidf-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/datasets.yaml
+```
+
+Artifacts are generated under:
+
+- `results/comparisons/<result_csv_stem>/`
+
+Generated files:
+
+- `tfidf_sensitivity_summary.csv`
+- `tfidf_sensitivity_by_track.csv`
+- `tfidf_interaction_summary.csv`
+- `tfidf_failure_records.csv`
+- `tfidf_mrr_heatmap_sublinear_false.png/.pdf`
+- `tfidf_mrr_heatmap_sublinear_true.png/.pdf`
+- `tfidf_failure_rate_heatmap.png/.pdf`
+- `tfidf_sensitivity_interpretation.md`
+
+Interpretation notes:
+
+- Performance summaries are computed on successful TF-IDF runs only.
+- Failures are represented explicitly by inferring missing `(dataset × tfidf_grid)` rows from config.
+- `tfidf_sensitivity_interpretation.md` includes a computed “Possible Why” scaffold tied to sparsity/pruning patterns.
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:
