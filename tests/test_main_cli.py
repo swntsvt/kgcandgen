@@ -149,7 +149,10 @@ experiments:
         self.assertEqual(exit_code, 1)
         self.assertIn("Error:", stderr.getvalue())
         combined = "\n".join(captured.output)
-        self.assertIn("CLI execution failed (config_path=config/does_not_exist.yaml", combined)
+        self.assertIn(
+            "CLI execution failed (command=run, config_path=config/does_not_exist.yaml",
+            combined,
+        )
 
     def test_cli_default_output_fails_when_no_new_file_is_created(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -199,6 +202,83 @@ experiments:
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
         self.assertIsNone(run_mock.call_args.kwargs["show_progress"])
+
+    def test_compare_models_explicit_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "result_fixture.csv"
+            results_csv.write_text(
+                "dataset,track,method,hyperparameters,mrr,recall_at_10\n"
+                "d1,biodiv,tfidf,{},0.9,0.8\n"
+                "d1,biodiv,bm25,{},0.8,0.7\n",
+                encoding="utf-8",
+            )
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_model_comparison",
+                return_value={"output_dir": output_dir},
+            ) as compare_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "compare-models",
+                            "--results-csv",
+                            str(results_csv),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            compare_mock.assert_called_once_with(
+                results_csv_path=str(results_csv),
+                output_dir=str(output_dir),
+            )
+            self.assertIn(f"Comparison Report Dir: {output_dir}", stdout.getvalue())
+
+    def test_compare_models_default_latest(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.main.generate_model_comparison",
+            return_value={"output_dir": Path("results/comparisons/result_x")},
+        ) as compare_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["compare-models"])
+
+        self.assertEqual(exit_code, 0)
+        compare_mock.assert_called_once_with(
+            results_csv_path=None,
+            output_dir="results/comparisons",
+        )
+        self.assertIn("Comparison Report Dir:", stdout.getvalue())
+
+    def test_compare_models_failure_path(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch(
+                "src.main.generate_model_comparison",
+                side_effect=ValueError("bad compare input"),
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["compare-models"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: bad compare input", stderr.getvalue())
+        self.assertIn("CLI execution failed", "\n".join(captured.output))
+
+    def test_top_level_help_lists_compare_models_command(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as exc:
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                main(["--help"])
+
+        self.assertEqual(exc.exception.code, 0)
+        help_text = stdout.getvalue()
+        self.assertIn("compare-models", help_text)
+        self.assertIn("run", help_text)
 
 
 if __name__ == "__main__":

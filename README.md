@@ -227,6 +227,50 @@ CLI behavior:
 - `--progress` and `--no-progress` override default progress behavior.
 - Prints only the final results CSV path on success.
 
+## Model Comparison Report
+
+Use the comparison command to generate a TF-IDF vs BM25 report from experiment CSV output.
+
+With latest available result CSV (auto-detected):
+
+```bash
+python -m src.main compare-models
+```
+
+With an explicit result CSV:
+
+```bash
+python -m src.main compare-models --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
+```
+
+With explicit output directory:
+
+```bash
+python -m src.main compare-models --output-dir results/comparisons
+```
+
+Generated artifacts are written under:
+
+- `results/comparisons/<result_csv_stem>/`
+
+Artifacts include:
+
+- `best_of_grid_summary.csv`
+- `aggregate_of_grid_summary.csv`
+- `wins_overall.csv`
+- `wins_by_track.csv`
+- `best_mrr_dumbbell.png/.pdf`
+- `best_mrr_track_box.png/.pdf`
+- `best_mrr_track_violin.png/.pdf`
+- `interpretation_scaffold.md`
+
+Comparison views:
+
+- **Best-of-grid**: best score per `(dataset, method)` (separately for MRR, Recall@10, and Recall@50).
+- **Aggregate-of-grid**: mean/median/std per `(dataset, method)` for MRR, Recall@10, and Recall@50 across all hyperparameter runs.
+
+`interpretation_scaffold.md` is a concise template to summarize what happened overall and by track.
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:
