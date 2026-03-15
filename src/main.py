@@ -79,6 +79,22 @@ def _build_tfidf_sensitivity_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_depth_analysis_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--results-csv",
+        default=None,
+        help=(
+            "Path to experiment results CSV. If omitted, the latest results/result_*.csv "
+            "is used."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results/comparisons",
+        help="Directory where depth-analysis artifacts are written (default: results/comparisons).",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -99,6 +115,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate TF-IDF hyperparameter sensitivity artifacts from results CSV.",
     )
     _build_tfidf_sensitivity_parser(tfidf_sensitivity_parser)
+
+    depth_analysis_parser = subparsers.add_parser(
+        "depth-analysis",
+        help="Generate retrieval-depth behavior artifacts from results CSV.",
+    )
+    _build_depth_analysis_parser(depth_analysis_parser)
 
     return parser
 
@@ -170,6 +192,17 @@ def _run_tfidf_sensitivity_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_depth_analysis_cli(args: argparse.Namespace) -> int:
+    from src.analysis.depth_analysis import generate_depth_analysis
+
+    artifacts = generate_depth_analysis(
+        results_csv_path=args.results_csv,
+        output_dir=args.output_dir,
+    )
+    print(f"Depth Analysis Dir: {artifacts['output_dir']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
 
@@ -187,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_compare_cli(args)
         if args.command == "tfidf-sensitivity":
             return _run_tfidf_sensitivity_cli(args)
+        if args.command == "depth-analysis":
+            return _run_depth_analysis_cli(args)
         return _run_experiment_cli(args)
     except Exception as exc:
         logger.exception(

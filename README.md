@@ -308,6 +308,46 @@ Interpretation notes:
 - Failures are represented explicitly by inferring missing `(dataset × tfidf_grid)` rows from config.
 - `tfidf_sensitivity_interpretation.md` includes a computed “Possible Why” scaffold tied to sparsity/pruning patterns.
 
+## Depth Analysis
+
+Use the depth-analysis command to quantify recall gains across cutoff depths (`k=1,5,10,20,50`) using the
+best-MRR setting per `(dataset, method)`.
+
+With latest available result CSV (auto-detected):
+
+```bash
+python -m src.main depth-analysis
+```
+
+With explicit result CSV and output directory:
+
+```bash
+python -m src.main depth-analysis --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --output-dir results/comparisons
+```
+
+Artifacts are generated under:
+
+- `results/comparisons/<result_csv_stem>/`
+
+Generated files:
+
+- `depth_best_settings.csv`
+- `depth_marginal_gains.csv`
+- `depth_gain_summary_overall.csv`
+- `depth_gain_summary_by_track.csv`
+- `depth_transition_coverage.csv`
+- `depth_recall_gain_curves_by_method.png/.pdf`
+- `depth_marginal_gain_bars.png/.pdf`
+- `depth_transition_coverage.png/.pdf`
+- `depth_analysis_interpretation.md`
+- `depth_analysis_manifest.txt`
+
+Interpretation notes:
+
+- Best-setting policy is fixed to highest `mrr` per `(dataset, method)`.
+- Transition gains are cap-aware and include `is_capped_before_to` and `effective_to_k`.
+- High-k interpretation should use `depth_transition_coverage.csv` to account for `candidate_size` ceilings.
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:
