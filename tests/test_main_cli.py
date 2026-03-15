@@ -316,6 +316,54 @@ experiments:
         )
         self.assertIn("TF-IDF Sensitivity Dir:", stdout.getvalue())
 
+    def test_bm25_sensitivity_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_bm25_sensitivity",
+                return_value={"output_dir": output_dir},
+            ) as sensitivity_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "bm25-sensitivity",
+                            "--results-csv",
+                            str(tmp / "result_fixture.csv"),
+                            "--config-path",
+                            str(tmp / "datasets.yaml"),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            sensitivity_mock.assert_called_once_with(
+                results_csv_path=str(tmp / "result_fixture.csv"),
+                config_path=str(tmp / "datasets.yaml"),
+                output_dir=str(output_dir),
+            )
+            self.assertIn(f"BM25 Sensitivity Dir: {output_dir}", stdout.getvalue())
+
+    def test_bm25_sensitivity_default_args(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.main.generate_bm25_sensitivity",
+            return_value={"output_dir": Path("results/comparisons/result_x")},
+        ) as sensitivity_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["bm25-sensitivity"])
+
+        self.assertEqual(exit_code, 0)
+        sensitivity_mock.assert_called_once_with(
+            results_csv_path=None,
+            config_path="config/datasets.yaml",
+            output_dir="results/comparisons",
+        )
+        self.assertIn("BM25 Sensitivity Dir:", stdout.getvalue())
+
     def test_depth_analysis_explicit_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -386,6 +434,7 @@ experiments:
         self.assertIn("compare-models", help_text)
         self.assertIn("tfidf-sensitivity", help_text)
         self.assertIn("depth-analysis", help_text)
+        self.assertIn("bm25-sensitivity", help_text)
         self.assertIn("run", help_text)
 
 

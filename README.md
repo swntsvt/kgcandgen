@@ -348,6 +348,46 @@ Interpretation notes:
 - Transition gains are cap-aware and include `is_capped_before_to` and `effective_to_k`.
 - High-k interpretation should use `depth_transition_coverage.csv` to account for `candidate_size` ceilings.
 
+## BM25 Sensitivity Analysis
+
+Use the sensitivity command to analyze BM25 robustness and stability over `k1` and `b`.
+
+With latest available result CSV (auto-detected):
+
+```bash
+python -m src.main bm25-sensitivity
+```
+
+With explicit result CSV and config path:
+
+```bash
+python -m src.main bm25-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/datasets.yaml
+```
+
+Artifacts are generated under:
+
+- `results/comparisons/<result_csv_stem>/`
+
+Generated files:
+
+- `bm25_sensitivity_summary.csv`
+- `bm25_sensitivity_by_track.csv`
+- `bm25_dataset_stability.csv`
+- `bm25_track_stability.csv`
+- `bm25_top_settings_with_ci.csv`
+- `bm25_failure_records.csv`
+- `bm25_mrr_heatmap_overall.png/.pdf`
+- `bm25_mrr_heatmap_by_track.png/.pdf`
+- `bm25_mrr_profiles_by_b.png/.pdf`
+- `bm25_failure_rate_heatmap.png/.pdf`
+- `bm25_sensitivity_interpretation.md`
+
+Interpretation notes:
+
+- Performance summaries are computed on successful BM25 runs only.
+- Failure surface is represented explicitly by inferring missing `(dataset × bm25_grid)` rows.
+- Top settings are ranked by mean MRR and include bootstrap percentile CI (fixed seed, 1000 samples).
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:
