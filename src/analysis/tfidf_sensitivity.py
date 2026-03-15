@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from src.analysis.plot_env import configure_plot_environment
+
+configure_plot_environment()
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt

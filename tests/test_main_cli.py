@@ -364,6 +364,64 @@ experiments:
         )
         self.assertIn("BM25 Sensitivity Dir:", stdout.getvalue())
 
+    def test_depth_analysis_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.analysis.depth_analysis.generate_depth_analysis",
+                return_value={"output_dir": output_dir},
+            ) as depth_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "depth-analysis",
+                            "--results-csv",
+                            str(tmp / "result_fixture.csv"),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            depth_mock.assert_called_once_with(
+                results_csv_path=str(tmp / "result_fixture.csv"),
+                output_dir=str(output_dir),
+            )
+            self.assertIn(f"Depth Analysis Dir: {output_dir}", stdout.getvalue())
+
+    def test_depth_analysis_default_args(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.analysis.depth_analysis.generate_depth_analysis",
+            return_value={"output_dir": Path("results/comparisons/result_x")},
+        ) as depth_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["depth-analysis"])
+
+        self.assertEqual(exit_code, 0)
+        depth_mock.assert_called_once_with(
+            results_csv_path=None,
+            output_dir="results/comparisons",
+        )
+        self.assertIn("Depth Analysis Dir:", stdout.getvalue())
+
+    def test_depth_analysis_failure_path(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch(
+                "src.analysis.depth_analysis.generate_depth_analysis",
+                side_effect=ValueError("bad depth input"),
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["depth-analysis"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: bad depth input", stderr.getvalue())
+        self.assertIn("CLI execution failed", "\n".join(captured.output))
+
     def test_top_level_help_lists_compare_models_command(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -375,6 +433,7 @@ experiments:
         help_text = stdout.getvalue()
         self.assertIn("compare-models", help_text)
         self.assertIn("tfidf-sensitivity", help_text)
+        self.assertIn("depth-analysis", help_text)
         self.assertIn("bm25-sensitivity", help_text)
         self.assertIn("run", help_text)
 
