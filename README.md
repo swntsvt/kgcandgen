@@ -217,6 +217,18 @@ With progress bars forced off:
 python -m src.main --no-progress
 ```
 
+Run experiments and generate all reports in one command:
+
+```bash
+python -m src.main full-run
+```
+
+With explicit config/output controls:
+
+```bash
+python -m src.main full-run --config-path config/datasets.yaml --output-csv-path results/my_run.csv --output-dir results/comparisons --no-progress
+```
+
 CLI behavior:
 
 - Runs all datasets listed in the provided config.
@@ -225,7 +237,14 @@ CLI behavior:
   - enabled in interactive terminals
   - disabled in non-interactive contexts (CI/redirected output)
 - `--progress` and `--no-progress` override default progress behavior.
-- Prints only the final results CSV path on success.
+- `run` prints only the final results CSV path on success.
+
+`full-run` behavior:
+
+- Runs stages in order: experiments -> model comparison -> TF-IDF sensitivity -> BM25 sensitivity -> depth analysis.
+- Uses the exact same resolved results CSV for all report stages.
+- Fails fast if any stage fails (partial artifacts are retained).
+- Writes `full_run_manifest.txt` under `results/comparisons/<result_csv_stem>/` with stage status, paths, and timing metadata.
 
 ## Model Comparison Report
 

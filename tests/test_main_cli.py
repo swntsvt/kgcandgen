@@ -371,7 +371,7 @@ experiments:
             stdout = io.StringIO()
 
             with patch(
-                "src.analysis.depth_analysis.generate_depth_analysis",
+                "src.main.generate_depth_analysis",
                 return_value={"output_dir": output_dir},
             ) as depth_mock:
                 with contextlib.redirect_stdout(stdout):
@@ -395,7 +395,7 @@ experiments:
     def test_depth_analysis_default_args(self) -> None:
         stdout = io.StringIO()
         with patch(
-            "src.analysis.depth_analysis.generate_depth_analysis",
+            "src.main.generate_depth_analysis",
             return_value={"output_dir": Path("results/comparisons/result_x")},
         ) as depth_mock:
             with contextlib.redirect_stdout(stdout):
@@ -412,7 +412,7 @@ experiments:
         stderr = io.StringIO()
         with self.assertLogs("src.main", level="ERROR") as captured:
             with patch(
-                "src.analysis.depth_analysis.generate_depth_analysis",
+                "src.main.generate_depth_analysis",
                 side_effect=ValueError("bad depth input"),
             ):
                 with contextlib.redirect_stderr(stderr):
@@ -421,6 +421,200 @@ experiments:
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: ValueError: bad depth input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
+
+    def test_full_run_success_orders_stages_and_shares_results_csv(self) -> None:
+        stdout = io.StringIO()
+        call_order: list[str] = []
+        resolved_csv = Path("results/result_shared.csv")
+        shared_output_dir = Path("results/comparisons/result_shared")
+
+        def _mark(name: str):
+            def _fn(*_args, **_kwargs):
+                call_order.append(name)
+                return {"output_dir": shared_output_dir}
+
+            return _fn
+
+        with patch("src.main.run_experiments", side_effect=lambda **_: call_order.append("run_experiments")) as run_mock:
+            with patch("src.main._resolve_new_result_file", return_value=resolved_csv) as resolve_mock:
+                with patch("src.main.generate_model_comparison", side_effect=_mark("model_comparison")) as model_mock:
+                    with patch("src.main.generate_tfidf_sensitivity", side_effect=_mark("tfidf_sensitivity")) as tfidf_mock:
+                        with patch("src.main.generate_bm25_sensitivity", side_effect=_mark("bm25_sensitivity")) as bm25_mock:
+                            with patch(
+                                "src.main.generate_depth_analysis",
+                                side_effect=_mark("depth_analysis"),
+                            ) as depth_mock:
+                                with contextlib.redirect_stdout(stdout):
+                                    exit_code = main(
+                                        [
+                                            "full-run",
+                                            "--config-path",
+                                            "config/datasets.yaml",
+                                            "--output-dir",
+                                            "results/comparisons",
+                                            "--no-progress",
+                                        ]
+                                    )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            call_order,
+            [
+                "run_experiments",
+                "model_comparison",
+                "tfidf_sensitivity",
+                "bm25_sensitivity",
+                "depth_analysis",
+            ],
+        )
+        run_mock.assert_called_once_with(
+            config_path="config/datasets.yaml",
+            output_csv_path=None,
+            show_progress=False,
+        )
+        resolve_mock.assert_called_once()
+        model_mock.assert_called_once_with(
+            results_csv_path=resolved_csv,
+            output_dir="results/comparisons",
+        )
+        tfidf_mock.assert_called_once_with(
+            results_csv_path=resolved_csv,
+            config_path="config/datasets.yaml",
+            output_dir="results/comparisons",
+        )
+        bm25_mock.assert_called_once_with(
+            results_csv_path=resolved_csv,
+            config_path="config/datasets.yaml",
+            output_dir="results/comparisons",
+        )
+        depth_mock.assert_called_once_with(
+            results_csv_path=resolved_csv,
+            output_dir="results/comparisons",
+        )
+        output_text = stdout.getvalue()
+        self.assertIn("Results CSV: results/result_shared.csv", output_text)
+        self.assertIn("Full Run Manifest:", output_text)
+
+    def test_full_run_explicit_output_csv_path_is_forwarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_csv = tmp / "explicit.csv"
+            output_root = tmp / "comparisons" / "result_explicit"
+            output_root.mkdir(parents=True, exist_ok=True)
+
+            def _run_side_effect(**_kwargs):
+                output_csv.write_text("dataset,track,method,mrr,recall_at_10,recall_at_50\n", encoding="utf-8")
+
+            with patch("src.main.run_experiments", side_effect=_run_side_effect) as run_mock:
+                with patch("src.main._resolve_new_result_file") as resolve_mock:
+                    with patch(
+                        "src.main.generate_model_comparison",
+                        return_value={"output_dir": output_root},
+                    ) as model_mock:
+                        with patch(
+                            "src.main.generate_tfidf_sensitivity",
+                            return_value={"output_dir": output_root},
+                        ):
+                            with patch(
+                                "src.main.generate_bm25_sensitivity",
+                                return_value={"output_dir": output_root},
+                            ):
+                                with patch(
+                                    "src.main.generate_depth_analysis",
+                                    return_value={"output_dir": output_root},
+                                ):
+                                    exit_code = main(
+                                        [
+                                            "full-run",
+                                            "--config-path",
+                                            "config/datasets.yaml",
+                                            "--output-csv-path",
+                                            str(output_csv),
+                                            "--output-dir",
+                                            str(tmp / "comparisons"),
+                                        ]
+                                    )
+
+            self.assertEqual(exit_code, 0)
+            run_mock.assert_called_once()
+            resolve_mock.assert_not_called()
+            model_mock.assert_called_once_with(
+                results_csv_path=output_csv,
+                output_dir=str(tmp / "comparisons"),
+            )
+
+    def test_full_run_fails_fast_when_stage_errors(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch("src.main.run_experiments", return_value=[]):
+                with patch("src.main._resolve_new_result_file", return_value=Path("results/result_shared.csv")):
+                    with patch(
+                        "src.main.generate_model_comparison",
+                        side_effect=ValueError("comparison failed"),
+                    ):
+                        with patch("src.main.generate_tfidf_sensitivity") as tfidf_mock:
+                            with patch("src.main.generate_bm25_sensitivity") as bm25_mock:
+                                with patch("src.main.generate_depth_analysis") as depth_mock:
+                                    with contextlib.redirect_stderr(stderr):
+                                        exit_code = main(["full-run", "--no-progress"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: comparison failed", stderr.getvalue())
+        self.assertIn("Full-run stage failed stage=model_comparison", "\n".join(captured.output))
+        tfidf_mock.assert_not_called()
+        bm25_mock.assert_not_called()
+        depth_mock.assert_not_called()
+
+    def test_full_run_writes_manifest_on_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_csv = tmp / "run.csv"
+            output_root = tmp / "comparisons" / "result_run"
+            output_root.mkdir(parents=True, exist_ok=True)
+
+            def _run_side_effect(**_kwargs):
+                output_csv.write_text("track,version,dataset,method,mrr,recall_at_10,recall_at_50\n", encoding="utf-8")
+
+            with patch("src.main.run_experiments", side_effect=_run_side_effect):
+                with patch(
+                    "src.main.generate_model_comparison",
+                    return_value={"output_dir": output_root},
+                ):
+                    with patch(
+                        "src.main.generate_tfidf_sensitivity",
+                        return_value={"output_dir": output_root},
+                    ):
+                        with patch(
+                            "src.main.generate_bm25_sensitivity",
+                            return_value={"output_dir": output_root},
+                        ):
+                            with patch(
+                                "src.main.generate_depth_analysis",
+                                return_value={"output_dir": output_root},
+                            ):
+                                exit_code = main(
+                                    [
+                                        "full-run",
+                                        "--output-csv-path",
+                                        str(output_csv),
+                                        "--output-dir",
+                                        str(tmp / "comparisons"),
+                                    ]
+                                )
+
+            self.assertEqual(exit_code, 0)
+            manifest_path = output_root / "full_run_manifest.txt"
+            self.assertTrue(manifest_path.exists())
+            manifest_text = manifest_path.read_text(encoding="utf-8")
+            self.assertIn("generated_at_start=", manifest_text)
+            self.assertIn("generated_at_end=", manifest_text)
+            self.assertIn("elapsed_seconds=", manifest_text)
+            self.assertIn("stage_run_experiments=success", manifest_text)
+            self.assertIn("stage_model_comparison=success", manifest_text)
+            self.assertIn("stage_tfidf_sensitivity=success", manifest_text)
+            self.assertIn("stage_bm25_sensitivity=success", manifest_text)
+            self.assertIn("stage_depth_analysis=success", manifest_text)
+            self.assertIn(f"results_csv={output_csv.resolve()}", manifest_text)
 
     def test_top_level_help_lists_compare_models_command(self) -> None:
         stdout = io.StringIO()
@@ -435,6 +629,7 @@ experiments:
         self.assertIn("tfidf-sensitivity", help_text)
         self.assertIn("depth-analysis", help_text)
         self.assertIn("bm25-sensitivity", help_text)
+        self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
 
 
