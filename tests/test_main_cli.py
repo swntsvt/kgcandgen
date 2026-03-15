@@ -268,6 +268,54 @@ experiments:
         self.assertIn("Error: ValueError: bad compare input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
 
+    def test_tfidf_sensitivity_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_tfidf_sensitivity",
+                return_value={"output_dir": output_dir},
+            ) as sensitivity_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "tfidf-sensitivity",
+                            "--results-csv",
+                            str(tmp / "result_fixture.csv"),
+                            "--config-path",
+                            str(tmp / "datasets.yaml"),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            sensitivity_mock.assert_called_once_with(
+                results_csv_path=str(tmp / "result_fixture.csv"),
+                config_path=str(tmp / "datasets.yaml"),
+                output_dir=str(output_dir),
+            )
+            self.assertIn(f"TF-IDF Sensitivity Dir: {output_dir}", stdout.getvalue())
+
+    def test_tfidf_sensitivity_default_args(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.main.generate_tfidf_sensitivity",
+            return_value={"output_dir": Path("results/comparisons/result_x")},
+        ) as sensitivity_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["tfidf-sensitivity"])
+
+        self.assertEqual(exit_code, 0)
+        sensitivity_mock.assert_called_once_with(
+            results_csv_path=None,
+            config_path="config/datasets.yaml",
+            output_dir="results/comparisons",
+        )
+        self.assertIn("TF-IDF Sensitivity Dir:", stdout.getvalue())
+
     def test_top_level_help_lists_compare_models_command(self) -> None:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -278,6 +326,7 @@ experiments:
         self.assertEqual(exc.exception.code, 0)
         help_text = stdout.getvalue()
         self.assertIn("compare-models", help_text)
+        self.assertIn("tfidf-sensitivity", help_text)
         self.assertIn("run", help_text)
 
 

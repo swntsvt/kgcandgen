@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from src.analysis.model_comparison import generate_model_comparison
+from src.analysis.tfidf_sensitivity import generate_tfidf_sensitivity
 from src.experiments.experiment_runner import run_experiments
 from src.logging_utils import setup_logging
 
@@ -57,6 +58,27 @@ def _build_compare_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_tfidf_sensitivity_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--results-csv",
+        default=None,
+        help=(
+            "Path to experiment results CSV. If omitted, the latest results/result_*.csv "
+            "is used."
+        ),
+    )
+    parser.add_argument(
+        "--config-path",
+        default="config/datasets.yaml",
+        help="Path to dataset YAML config (default: config/datasets.yaml).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results/comparisons",
+        help="Directory where sensitivity artifacts are written (default: results/comparisons).",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -71,6 +93,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate TF-IDF vs BM25 comparison artifacts from results CSV.",
     )
     _build_compare_parser(compare_parser)
+
+    tfidf_sensitivity_parser = subparsers.add_parser(
+        "tfidf-sensitivity",
+        help="Generate TF-IDF hyperparameter sensitivity artifacts from results CSV.",
+    )
+    _build_tfidf_sensitivity_parser(tfidf_sensitivity_parser)
 
     return parser
 
@@ -132,6 +160,16 @@ def _run_compare_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_tfidf_sensitivity_cli(args: argparse.Namespace) -> int:
+    artifacts = generate_tfidf_sensitivity(
+        results_csv_path=args.results_csv,
+        config_path=args.config_path,
+        output_dir=args.output_dir,
+    )
+    print(f"TF-IDF Sensitivity Dir: {artifacts['output_dir']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
 
@@ -147,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "compare-models":
             return _run_compare_cli(args)
+        if args.command == "tfidf-sensitivity":
+            return _run_tfidf_sensitivity_cli(args)
         return _run_experiment_cli(args)
     except Exception as exc:
         logger.exception(
