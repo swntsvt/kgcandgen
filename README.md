@@ -104,6 +104,31 @@ $$
 
 Plain-text note: candidate list order is treated as rank order; missing prediction entries for a gold source contribute `0`.
 
+## KG Entity Partitioning
+
+The repository includes a reusable KG-only utility layer for conservative entity typing and
+partitioning. This layer is available for future KG execution work, but it does not
+change the current class-only experiment runner behavior.
+
+Typing rules:
+
+- `class`:
+  - direct `rdf:type owl:Class`, otherwise DBkWik `/class/` URI space
+- `predicate`:
+  - direct `rdf:type rdf:Property`
+  - also supports `owl:ObjectProperty` and `owl:DatatypeProperty`
+  - otherwise DBkWik `/property/` URI space
+- `instance`:
+  - DBkWik `/resource/` URI space after excluding anything already typed as `class`
+    or `predicate`
+
+Incomplete typing behavior:
+
+- URIs without supported graph or URI-space evidence remain untyped.
+- Gold mappings are partitioned only when source and target resolve to the same type.
+- Mixed-type or untyped gold pairs are skipped and logged.
+- Empty class/predicate/instance partitions are handled without failing execution.
+
 ## Assumptions and Limitations
 
 - Gold alignments are evaluated as **1:1 source->target mappings** (`dict[source] -> target`).
