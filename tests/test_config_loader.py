@@ -157,8 +157,62 @@ heldout:
             text = config_path.read_text(encoding="utf-8")
             config_path.write_text(text.split("heldout:\n", 1)[0], encoding="utf-8")
 
+            runtime = load_runtime_config(config_path)
+
+        self.assertEqual(runtime.heldout_datasets["kg_v1"].track, "kg")
+        self.assertIsNone(runtime.heldout)
+
+    def test_missing_heldout_mapping_raises_when_required(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            text = config_path.read_text(encoding="utf-8")
+            config_path.write_text(text.split("heldout:\n", 1)[0], encoding="utf-8")
+
             with self.assertRaisesRegex(ValueError, "'heldout' mapping"):
-                load_runtime_config(config_path)
+                load_runtime_config(config_path, require_heldout=True)
+
+    def test_dev_only_config_loads_for_non_heldout_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "source.rdf"
+            target = tmp / "target.rdf"
+            alignment = tmp / "alignment.rdf"
+            source.write_text("", encoding="utf-8")
+            target.write_text("", encoding="utf-8")
+            alignment.write_text("", encoding="utf-8")
+
+            config_path = tmp / "runtime.yaml"
+            config_path.write_text(
+                "\n".join(
+                    [
+                        "experiments:",
+                        "  evaluation_ks: [1]",
+                        "  tfidf_grid:",
+                        "    - ngram_range: [1, 1]",
+                        "      min_df: 1",
+                        "      max_df: 1.0",
+                        "      sublinear_tf: false",
+                        "  bm25_grid:",
+                        "    - k1: 1.5",
+                        "      b: 0.75",
+                        "development_datasets:",
+                        "  conference_v1:",
+                        "    track: conference",
+                        '    version: "1"',
+                        f"    source_rdf: {source}",
+                        f"    target_rdf: {target}",
+                        f"    alignment_rdf: {alignment}",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            runtime = load_runtime_config(config_path)
+
+        self.assertIn("conference_v1", runtime.development_datasets)
+        self.assertEqual(runtime.heldout_datasets, {})
+        self.assertIsNone(runtime.heldout)
 
     def test_invalid_heldout_policy_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,7 +225,7 @@ heldout:
             )
 
             with self.assertRaisesRegex(ValueError, "fixed supported policy"):
-                load_runtime_config(config_path)
+                load_runtime_config(config_path, require_heldout=True)
 
     def test_invalid_evaluation_ks_raises(self) -> None:
         invalid_cases = [

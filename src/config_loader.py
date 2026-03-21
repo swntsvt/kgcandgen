@@ -92,7 +92,7 @@ class RuntimeConfig:
     development_datasets: dict[str, DatasetConfig]
     heldout_datasets: dict[str, DatasetConfig]
     experiments: ExperimentConfig
-    heldout: HeldoutConfig
+    heldout: HeldoutConfig | None
 
     @property
     def datasets(self) -> dict[str, DatasetConfig]:
@@ -359,7 +359,11 @@ def _validate_heldout_config(raw_heldout: Any) -> HeldoutConfig:
     )
 
 
-def load_runtime_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> RuntimeConfig:
+def load_runtime_config(
+    config_path: str | Path = DEFAULT_CONFIG_PATH,
+    *,
+    require_heldout: bool = False,
+) -> RuntimeConfig:
     """Load and validate runtime configuration from YAML."""
     path = Path(config_path)
     logger.info("Loading runtime config from %s", path)
@@ -368,13 +372,13 @@ def load_runtime_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Runtim
     if "development_datasets" not in content:
         logger.error("Config missing 'development_datasets' mapping: %s", path)
         raise ValueError("Config must contain a 'development_datasets' mapping.")
-    if "heldout_datasets" not in content:
-        logger.error("Config missing 'heldout_datasets' mapping: %s", path)
-        raise ValueError("Config must contain a 'heldout_datasets' mapping.")
     if "experiments" not in content:
         logger.error("Config missing 'experiments' mapping: %s", path)
         raise ValueError("Config must contain an 'experiments' mapping.")
-    if "heldout" not in content:
+    if require_heldout and "heldout_datasets" not in content:
+        logger.error("Config missing 'heldout_datasets' mapping: %s", path)
+        raise ValueError("Config must contain a 'heldout_datasets' mapping.")
+    if require_heldout and "heldout" not in content:
         logger.error("Config missing 'heldout' mapping: %s", path)
         raise ValueError("Config must contain a 'heldout' mapping.")
 
@@ -383,13 +387,17 @@ def load_runtime_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> Runtim
         field_name="development_datasets",
         path=path,
     )
-    heldout_datasets = _validate_dataset_group(
-        content["heldout_datasets"],
-        field_name="heldout_datasets",
-        path=path,
+    heldout_datasets = (
+        _validate_dataset_group(
+            content["heldout_datasets"],
+            field_name="heldout_datasets",
+            path=path,
+        )
+        if "heldout_datasets" in content
+        else {}
     )
     experiments = _validate_experiment_config(content["experiments"])
-    heldout = _validate_heldout_config(content["heldout"])
+    heldout = _validate_heldout_config(content["heldout"]) if "heldout" in content else None
     logger.info(
         "Loaded %d validated development dataset(s) and %d heldout dataset(s) from %s",
         len(development_datasets),

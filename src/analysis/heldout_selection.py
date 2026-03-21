@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import math
 from pathlib import Path
@@ -98,6 +97,8 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
         method_frame.groupby(["track", "hyperparameters"], as_index=False)
         .agg(track_mrr_mean=("mrr", "mean"))
     )
+    all_tracks = sorted(str(track) for track in grouped["track"].unique())
+    all_hyperparameters = sorted(str(value) for value in grouped["hyperparameters"].unique())
 
     for track, track_group in grouped.groupby("track", sort=True):
         sorted_group = track_group.sort_values(
@@ -125,31 +126,76 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
 
     summary_rows: list[dict[str, object]] = []
     method_name = str(method_frame["method"].iloc[0])
-    for hyperparameters, candidate_group in track_frame.groupby("hyperparameters", sort=True):
-        candidate_group = candidate_group.sort_values(["track"], kind="mergesort").reset_index(drop=True)
-        scores = [float(value) for value in candidate_group["track_score"]]
+    track_candidate_counts = (
+        track_frame.groupby("track")["hyperparameters"].nunique().astype(int).to_dict()
+    )
+    for hyperparameters in all_hyperparameters:
+        candidate_group = track_frame[track_frame["hyperparameters"] == hyperparameters].copy()
+        observed_by_track = {
+            str(row.track): row
+            for row in candidate_group.sort_values(["track"], kind="mergesort").itertuples(index=False)
+        }
+
+        completed_rows: list[dict[str, object]] = []
+        for track in all_tracks:
+            observed = observed_by_track.get(track)
+            if observed is None:
+                completed_rows.append(
+                    {
+                        "track": track,
+                        "hyperparameters": hyperparameters,
+                        "track_mrr_mean": None,
+                        "track_rank": int(track_candidate_counts[track]) + 1,
+                        "track_score": 0.0,
+                        "status": "missing",
+                    }
+                )
+                continue
+
+            completed_rows.append(
+                {
+                    "track": track,
+                    "hyperparameters": hyperparameters,
+                    "track_mrr_mean": float(observed.track_mrr_mean),
+                    "track_rank": int(observed.track_rank),
+                    "track_score": float(observed.track_score),
+                    "status": "observed",
+                }
+            )
+
+        completed_group = pd.DataFrame(completed_rows).sort_values(["track"], kind="mergesort").reset_index(drop=True)
+        scores = [float(value) for value in completed_group["track_score"]]
         mu = float(sum(scores) / len(scores))
         sigma = _population_std(scores)
         heldout_score = float(mu - (lambda_penalty * sigma))
 
         track_mrr_means = {
-            str(row.track): round(float(row.track_mrr_mean), 12)
-            for row in candidate_group.itertuples(index=False)
+            str(row.track): (
+                round(float(row.track_mrr_mean), 12)
+                if row.track_mrr_mean is not None
+                else None
+            )
+            for row in completed_group.itertuples(index=False)
         }
         track_ranks = {
             str(row.track): int(row.track_rank)
-            for row in candidate_group.itertuples(index=False)
+            for row in completed_group.itertuples(index=False)
         }
         track_normalized_scores = {
             str(row.track): round(float(row.track_score), 12)
-            for row in candidate_group.itertuples(index=False)
+            for row in completed_group.itertuples(index=False)
+        }
+        track_statuses = {
+            str(row.track): str(row.status)
+            for row in completed_group.itertuples(index=False)
         }
 
         summary_rows.append(
             {
                 "method": method_name,
                 "hyperparameters": str(hyperparameters),
-                "tracks_observed": int(len(candidate_group)),
+                "tracks_observed": int(sum(1 for status in track_statuses.values() if status == "observed")),
+                "tracks_total": int(len(all_tracks)),
                 "track_mrr_means_json": json.dumps(
                     track_mrr_means, sort_keys=True, separators=(",", ":")
                 ),
@@ -158,6 +204,9 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
                 ),
                 "track_normalized_scores_json": json.dumps(
                     track_normalized_scores, sort_keys=True, separators=(",", ":")
+                ),
+                "track_statuses_json": json.dumps(
+                    track_statuses, sort_keys=True, separators=(",", ":")
                 ),
                 "mu": mu,
                 "sigma": sigma,
@@ -258,7 +307,11 @@ def generate_heldout_selection(
 ) -> dict[str, Path]:
     """Generate deterministic held-out setting selection artifacts."""
     source_csv = _resolve_results_csv(results_csv_path)
-    runtime_config = load_runtime_config(config_path=config_path)
+    runtime_config = load_runtime_config(config_path=config_path, require_heldout=True)
+    if runtime_config.heldout is None:
+        raise HeldoutSelectionValidationError(
+            "Held-out selection requires a 'heldout' config section."
+        )
     policy = runtime_config.heldout.selection.as_dict()
     frame = pd.read_csv(source_csv)
     validated = _validate_results_frame(
@@ -283,7 +336,6 @@ def generate_heldout_selection(
     selected_settings_path.write_text(
         json.dumps(
             {
-                "generated_at": datetime.now().isoformat(timespec="seconds"),
                 "source_csv": str(source_csv),
                 "config_path": str(Path(config_path).resolve()),
                 "policy": policy,

@@ -446,7 +446,6 @@ Generated files:
 - `heldout_selection_summary.csv`
 - `heldout_selected_settings.json`
 - `heldout_selection_manifest.md`
-- Top settings are ranked by mean MRR and include bootstrap percentile CI (fixed seed, 1000 samples).
 
 ## Logging
 

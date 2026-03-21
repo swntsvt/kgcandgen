@@ -250,6 +250,18 @@ class HeldoutSelectionTests(unittest.TestCase):
             self.assertEqual(payload["policy"]["metric"], "mrr")
             self.assertEqual(payload["policy"]["lambda"], 0.5)
             self.assertEqual(payload["heldout_datasets"], ["kg1"])
+            self.assertNotIn("generated_at", payload)
+
+            first_json = Path(artifacts["heldout_selected_settings"]).read_text(encoding="utf-8")
+            second_artifacts = generate_heldout_selection(
+                results_csv_path=results,
+                config_path=config,
+                output_dir=output_dir,
+            )
+            second_json = Path(second_artifacts["heldout_selected_settings"]).read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(first_json, second_json)
 
     def test_malformed_hyperparameters_json_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -272,6 +284,121 @@ class HeldoutSelectionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(HeldoutSelectionValidationError, "Malformed hyperparameters JSON"):
                 generate_heldout_selection(results, config_path=config, output_dir=tmp / "comparisons")
+
+    def test_missing_track_coverage_counts_against_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "source.rdf"
+            target = tmp / "target.rdf"
+            alignment = tmp / "alignment.rdf"
+            source.write_text("", encoding="utf-8")
+            target.write_text("", encoding="utf-8")
+            alignment.write_text("", encoding="utf-8")
+
+            config = tmp / "runtime.yaml"
+            results = tmp / "result_missing_track.csv"
+            self._write_config(config, source, target, alignment)
+            with results.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=["track", "version", "dataset", "method", "hyperparameters", "mrr"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {
+                            "track": "biodiv",
+                            "version": "v1",
+                            "dataset": "d1",
+                            "method": "tfidf",
+                            "hyperparameters": '{"ngram_range":[1,1],"min_df":1,"max_df":1.0,"sublinear_tf":false}',
+                            "mrr": 1.0,
+                        },
+                        {
+                            "track": "biodiv",
+                            "version": "v1",
+                            "dataset": "d1",
+                            "method": "tfidf",
+                            "hyperparameters": '{"ngram_range":[1,2],"min_df":1,"max_df":1.0,"sublinear_tf":false}',
+                            "mrr": 0.9,
+                        },
+                        {
+                            "track": "conference",
+                            "version": "v1",
+                            "dataset": "d2",
+                            "method": "tfidf",
+                            "hyperparameters": '{"ngram_range":[1,2],"min_df":1,"max_df":1.0,"sublinear_tf":false}',
+                            "mrr": 0.8,
+                        },
+                        {
+                            "track": "biodiv",
+                            "version": "v1",
+                            "dataset": "d1",
+                            "method": "tfidf",
+                            "hyperparameters": '{"ngram_range":[2,2],"min_df":1,"max_df":1.0,"sublinear_tf":false}',
+                            "mrr": 0.7,
+                        },
+                        {
+                            "track": "conference",
+                            "version": "v1",
+                            "dataset": "d2",
+                            "method": "tfidf",
+                            "hyperparameters": '{"ngram_range":[2,2],"min_df":1,"max_df":1.0,"sublinear_tf":false}',
+                            "mrr": 0.6,
+                        },
+                        {
+                            "track": "biodiv",
+                            "version": "v1",
+                            "dataset": "d1",
+                            "method": "bm25",
+                            "hyperparameters": '{"k1":0.6,"b":0.3}',
+                            "mrr": 0.6,
+                        },
+                        {
+                            "track": "conference",
+                            "version": "v1",
+                            "dataset": "d2",
+                            "method": "bm25",
+                            "hyperparameters": '{"k1":0.6,"b":0.3}',
+                            "mrr": 0.6,
+                        },
+                    ]
+                )
+
+            artifacts = generate_heldout_selection(
+                results_csv_path=results,
+                config_path=config,
+                output_dir=tmp / "comparisons",
+            )
+
+            with Path(artifacts["heldout_selection_summary"]).open(encoding="utf-8") as summary_file:
+                summary_rows = list(csv.DictReader(summary_file))
+
+            tfidf_rows = [row for row in summary_rows if row["method"] == "tfidf"]
+            selected = next(row for row in tfidf_rows if row["selected"] == "True")
+            penalized = next(
+                row
+                for row in tfidf_rows
+                if row["hyperparameters"] == '{"max_df":1.0,"min_df":1,"ngram_range":[1,1],"sublinear_tf":false}'
+            )
+
+            self.assertEqual(
+                selected["hyperparameters"],
+                '{"max_df":1.0,"min_df":1,"ngram_range":[1,2],"sublinear_tf":false}',
+            )
+            self.assertAlmostEqual(float(penalized["mu"]), 0.5)
+            self.assertAlmostEqual(float(penalized["sigma"]), 0.5)
+            self.assertAlmostEqual(float(penalized["heldout_score"]), 0.25)
+            self.assertEqual(int(penalized["tracks_observed"]), 1)
+            self.assertEqual(int(penalized["tracks_total"]), 2)
+            self.assertEqual(
+                json.loads(penalized["track_statuses_json"]),
+                {"biodiv": "observed", "conference": "missing"},
+            )
+            self.assertEqual(
+                json.loads(penalized["track_normalized_scores_json"]),
+                {"biodiv": 1.0, "conference": 0.0},
+            )
 
     def test_unknown_dataset_in_results_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
