@@ -5,14 +5,33 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import logging
+import json
+import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.experiments.experiment_runner import run_experiments
 from src.logging_utils import setup_logging
 
 logger = logging.getLogger("src.main")
+
+if TYPE_CHECKING:
+    from src.experiments.heldout_kg_runner import HeldoutKgResultRecord
+
+
+def _get_git_short_sha() -> str:
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=repo_root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.SubprocessError, OSError):
+        return "nogit"
 
 
 def generate_heldout_selection(
@@ -72,7 +91,7 @@ def run_heldout_kg_experiments(
     selected_settings_path: str | Path | None,
     output_csv_path: str | Path | None,
     show_progress: bool | None,
-) -> list[dict[str, object]]:
+) -> list[HeldoutKgResultRecord]:
     from src.experiments.heldout_kg_runner import (
         run_heldout_kg_experiments as _impl,
     )
@@ -266,6 +285,60 @@ def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_heldout_full_run_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config-path",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
+    )
+    parser.add_argument(
+        "--dev-results-csv",
+        default=None,
+        help=(
+            "Path to development results CSV used for held-out selection. If omitted, the latest "
+            "results/result_*.csv is used when selection runs."
+        ),
+    )
+    parser.add_argument(
+        "--selected-settings-json",
+        default=None,
+        help=(
+            "Optional heldout_selected_settings.json override. If provided, the selection stage is skipped."
+        ),
+    )
+    parser.add_argument(
+        "--heldout-results-csv",
+        default=None,
+        help=(
+            "Optional held-out KG results CSV override. If provided, the held-out KG run stage is skipped."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results/comparisons",
+        help="Directory where held-out report artifacts are written (default: results/comparisons).",
+    )
+    parser.add_argument(
+        "--output-csv-path",
+        default=None,
+        help=(
+            "Explicit output CSV path for the held-out KG run stage. Ignored when --heldout-results-csv "
+            "is provided."
+        ),
+    )
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        action="store_true",
+        help="Force-enable progress bars for the held-out KG run stage.",
+    )
+    progress_group.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Force-disable progress bars for the held-out KG run stage.",
+    )
+
+
 def _build_full_run_parser(parser: argparse.ArgumentParser) -> None:
     _build_run_parser(parser)
     parser.add_argument(
@@ -325,6 +398,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run frozen held-out KG evaluation by entity type.",
     )
     _build_run_heldout_kg_parser(heldout_run_parser)
+
+    heldout_full_run_parser = subparsers.add_parser(
+        "heldout-full-run",
+        help="Run the full held-out KG workflow: selection, held-out execution, and reporting.",
+    )
+    _build_heldout_full_run_parser(heldout_full_run_parser)
 
     full_run_parser = subparsers.add_parser(
         "full-run",
@@ -501,6 +580,205 @@ def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_existing_file(path_value: str | Path, *, label: str) -> Path:
+    path = Path(path_value)
+    if not path.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+    return path.resolve()
+
+
+def _load_selected_settings_source_csv(selected_settings_path: Path) -> Path | None:
+    try:
+        payload = json.loads(selected_settings_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    source_csv = payload.get("source_csv")
+    if not isinstance(source_csv, str) or not source_csv:
+        return None
+    return Path(source_csv).resolve()
+
+
+def _resolve_heldout_manifest_dir(
+    *,
+    output_dir: str | Path,
+    report_output_dir: Path | None,
+    heldout_results_csv: Path | None,
+    heldout_results_csv_arg: str | Path | None,
+    output_csv_path_arg: str | Path | None,
+) -> Path:
+    if report_output_dir is not None:
+        return report_output_dir.resolve()
+    if heldout_results_csv is not None:
+        return Path(output_dir).resolve() / heldout_results_csv.stem
+    if heldout_results_csv_arg is not None:
+        return Path(output_dir).resolve() / Path(heldout_results_csv_arg).stem
+    if output_csv_path_arg is not None:
+        return Path(output_dir).resolve() / Path(output_csv_path_arg).stem
+    return Path(output_dir).resolve() / "heldout_full_run_partial"
+
+
+def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
+    started_at = datetime.now()
+    start_perf = time.perf_counter()
+    show_progress = _resolve_show_progress(args)
+    stage_status: dict[str, str] = {
+        "select_heldout_settings": "not_run",
+        "run_heldout_kg": "not_run",
+        "report_heldout_kg": "not_run",
+    }
+
+    selected_settings_path: Path
+    heldout_results_csv: Path
+    development_results_csv: Path | None = None
+    report_output_dir: Path | None = None
+    caught_exc: Exception | None = None
+
+    try:
+        if args.selected_settings_json:
+            selected_settings_path = _resolve_existing_file(
+                args.selected_settings_json,
+                label="Selected settings JSON",
+            )
+            development_results_csv = _load_selected_settings_source_csv(selected_settings_path)
+            stage_status["select_heldout_settings"] = "skipped"
+        else:
+            logger.info(
+                "Starting heldout-full-run stage=%s results_csv=%s config_path=%s output_dir=%s",
+                "select_heldout_settings",
+                args.dev_results_csv,
+                args.config_path,
+                args.output_dir,
+            )
+            selection_artifacts = generate_heldout_selection(
+                results_csv_path=args.dev_results_csv,
+                config_path=args.config_path,
+                output_dir=args.output_dir,
+            )
+            selected_settings_path = Path(selection_artifacts["heldout_selected_settings"]).resolve()
+            development_results_csv = Path(selection_artifacts["source_csv"]).resolve()
+            stage_status["select_heldout_settings"] = "success"
+            logger.info("Completed heldout-full-run stage=%s", "select_heldout_settings")
+
+        if args.heldout_results_csv:
+            heldout_results_csv = _resolve_existing_file(
+                args.heldout_results_csv,
+                label="Held-out results CSV",
+            )
+            stage_status["run_heldout_kg"] = "skipped"
+        else:
+            logger.info(
+                "Starting heldout-full-run stage=%s config_path=%s selected_settings=%s output_csv_path=%s progress=%s",
+                "run_heldout_kg",
+                args.config_path,
+                selected_settings_path,
+                args.output_csv_path,
+                show_progress,
+            )
+            existing_files = (
+                _collect_existing_heldout_result_files()
+                if args.output_csv_path is None
+                else set()
+            )
+            run_heldout_kg_experiments(
+                config_path=args.config_path,
+                selected_settings_path=selected_settings_path,
+                output_csv_path=args.output_csv_path,
+                show_progress=show_progress,
+            )
+            heldout_results_csv = (
+                Path(args.output_csv_path).resolve()
+                if args.output_csv_path
+                else _resolve_new_heldout_result_file(existing_files)
+            )
+            if not heldout_results_csv.exists():
+                raise FileNotFoundError(
+                    f"Expected held-out output CSV was not created: {heldout_results_csv}"
+                )
+            stage_status["run_heldout_kg"] = "success"
+            logger.info("Completed heldout-full-run stage=%s", "run_heldout_kg")
+
+        logger.info(
+            "Starting heldout-full-run stage=%s heldout_results_csv=%s selected_settings=%s output_dir=%s",
+            "report_heldout_kg",
+            heldout_results_csv,
+            selected_settings_path,
+            args.output_dir,
+        )
+        report_artifacts = generate_kg_heldout_reporting(
+            results_csv_path=heldout_results_csv,
+            output_dir=args.output_dir,
+            selected_settings_path=selected_settings_path,
+        )
+        report_output_dir = Path(report_artifacts["output_dir"]).resolve()
+        stage_status["report_heldout_kg"] = "success"
+        logger.info("Completed heldout-full-run stage=%s", "report_heldout_kg")
+    except Exception as exc:
+        caught_exc = exc
+        failed_stage = next(
+            (
+                stage
+                for stage in ("select_heldout_settings", "run_heldout_kg", "report_heldout_kg")
+                if stage_status[stage] == "not_run"
+            ),
+            "unknown",
+        )
+        if failed_stage != "unknown":
+            stage_status[failed_stage] = "failed"
+        logger.exception(
+            "Heldout-full-run stage failed stage=%s dev_results_csv=%s config_path=%s selected_settings_json=%s heldout_results_csv=%s output_dir=%s error=%s: %s",
+            failed_stage,
+            args.dev_results_csv,
+            args.config_path,
+            args.selected_settings_json,
+            args.heldout_results_csv,
+            args.output_dir,
+            type(exc).__name__,
+            exc,
+        )
+    ended_at = datetime.now()
+    elapsed_seconds = time.perf_counter() - start_perf
+    manifest_dir = _resolve_heldout_manifest_dir(
+        output_dir=args.output_dir,
+        report_output_dir=report_output_dir,
+        heldout_results_csv=heldout_results_csv if "heldout_results_csv" in locals() else None,
+        heldout_results_csv_arg=args.heldout_results_csv,
+        output_csv_path_arg=args.output_csv_path,
+    )
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manifest_dir / "heldout_full_run_manifest.txt"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                f"generated_at_start={started_at.isoformat(timespec='seconds')}",
+                f"generated_at_end={ended_at.isoformat(timespec='seconds')}",
+                f"elapsed_seconds={elapsed_seconds:.6f}",
+                f"git_sha={_get_git_short_sha()}",
+                f"config_path={Path(args.config_path).resolve()}",
+                f"development_results_csv={development_results_csv if development_results_csv is not None else ''}",
+                f"selected_settings_json={selected_settings_path.resolve() if 'selected_settings_path' in locals() else ''}",
+                f"heldout_results_csv={heldout_results_csv.resolve() if 'heldout_results_csv' in locals() else ''}",
+                f"report_output_dir={report_output_dir if report_output_dir is not None else ''}",
+                f"stage_select_heldout_settings={stage_status['select_heldout_settings']}",
+                f"stage_run_heldout_kg={stage_status['run_heldout_kg']}",
+                f"stage_report_heldout_kg={stage_status['report_heldout_kg']}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    if caught_exc is not None:
+        raise caught_exc
+
+    print(f"Selected Settings JSON: {selected_settings_path}")
+    print(f"Held-Out KG Results CSV: {heldout_results_csv}")
+    print(f"Held-Out KG Report Dir: {report_output_dir}")
+    print(f"Held-Out Full Run Manifest: {manifest_path}")
+    return 0
+
+
 def _run_full_run_cli(args: argparse.Namespace) -> int:
     started_at = datetime.now()
     start_perf = time.perf_counter()
@@ -667,6 +945,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_report_heldout_kg_cli(args)
         if args.command == "run-heldout-kg":
             return _run_heldout_kg_cli(args)
+        if args.command == "heldout-full-run":
+            return _run_heldout_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
         return _run_experiment_cli(args)

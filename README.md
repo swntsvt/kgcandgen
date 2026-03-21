@@ -472,6 +472,46 @@ Generated files:
 - `heldout_selected_settings.json`
 - `heldout_selection_manifest.md`
 
+## End-to-End Held-Out KG Workflow
+
+Held-out track evaluation in this project means the final KG assessment is run only after
+hyperparameters have been frozen from development-track results. KG-track results are never
+used to tune TF-IDF or BM25 settings.
+
+Protocol rules:
+
+- **No KG tuning**: final TF-IDF and BM25 settings must come from the development-track
+  selection workflow.
+- **Entity-type-separated evaluation**: held-out KG execution evaluates `class`,
+  `predicate`, and `instance` partitions separately.
+- **Candidate Reduction Ratio**:
+  - `1 - min(k_max, |T_type|) / |T_type|`
+- **Macro summary**:
+  - unweighted average across `class`, `predicate`, and `instance`
+- **Micro summary**:
+  - gold-weighted average across held-out dataset-type rows
+
+Fully automated workflow:
+
+```bash
+python -m src.main heldout-full-run --config-path config/runtime.yaml --dev-results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
+```
+
+Manual step-by-step workflow:
+
+```bash
+python -m src.main select-heldout-settings --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/runtime.yaml
+python -m src.main run-heldout-kg --config-path config/runtime.yaml --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json
+python -m src.main report-heldout-kg --results-csv results/heldout_result_YYYYMMDD_HHMMSS_<gitsha>.csv --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json --output-dir results/comparisons
+```
+
+Artifact handoff:
+
+- selection produces `heldout_selected_settings.json`
+- held-out KG execution consumes that selected-settings artifact and produces `heldout_result_*.csv`
+- held-out reporting consumes the held-out CSV and the selected-settings artifact
+- `heldout-full-run` writes `heldout_full_run_manifest.txt` under the final held-out report directory
+
 ## Held-Out KG Runner
 
 Use the dedicated held-out KG runner to evaluate frozen TF-IDF and BM25 settings by
@@ -524,6 +564,28 @@ Generated files:
 - `kg_heldout_reduction_effectiveness.csv`
 - `kg_heldout_interpretation_scaffold.md`
 - `kg_heldout_transfer_summary.csv` when a compatible selected-settings artifact is available
+
+## Held-Out Full Run
+
+Use the explicit held-out orchestrator to run selection, held-out KG execution, and
+held-out reporting in one command without mixing this protocol into the development
+`full-run` workflow.
+
+With development results CSV and default output locations:
+
+```bash
+python -m src.main heldout-full-run --config-path config/runtime.yaml --dev-results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
+```
+
+With explicit selected-settings or held-out results overrides:
+
+```bash
+python -m src.main heldout-full-run --config-path config/runtime.yaml --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json --heldout-results-csv results/heldout_result_YYYYMMDD_HHMMSS_<gitsha>.csv --output-dir results/comparisons
+```
+
+Generated provenance file:
+
+- `heldout_full_run_manifest.txt`
 
 ## Logging
 
