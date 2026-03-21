@@ -126,6 +126,33 @@ class EntityPartitioningTests(unittest.TestCase):
         self.assertEqual(partitions.skipped_mixed_type_pairs, 0)
         self.assertEqual(partitions.skipped_untyped_pairs, 0)
 
+    def test_predicate_only_in_predicate_position_is_extracted_and_partitioned(self) -> None:
+        source_store = Store()
+        target_store = Store()
+        source_predicate = "http://dbkwik.webdatacommons.org/wiki/property/appearsIn"
+        target_predicate = "http://dbkwik.webdatacommons.org/other/property/appearsIn"
+        source_subject = "http://dbkwik.webdatacommons.org/wiki/resource/Thor"
+        target_subject = "http://dbkwik.webdatacommons.org/other/resource/Thor"
+        source_object = "http://dbkwik.webdatacommons.org/wiki/resource/Mjolnir"
+        target_object = "http://dbkwik.webdatacommons.org/other/resource/Mjolnir"
+
+        _add_named_node_quad(source_store, source_subject, source_predicate, source_object)
+        _add_named_node_quad(target_store, target_subject, target_predicate, target_object)
+
+        source_partitions = extract_typed_entity_partitions(source_store, graph_name="source")
+        target_partitions = extract_typed_entity_partitions(target_store, graph_name="target")
+        gold_partitions = partition_alignment_mappings_by_entity_type(
+            {source_predicate: target_predicate},
+            source_partitions,
+            target_partitions,
+            alignment_name="predicate-only alignment",
+        )
+
+        self.assertIn(source_predicate, source_partitions.predicates)
+        self.assertIn(target_predicate, target_partitions.predicates)
+        self.assertEqual(gold_partitions.predicates, {source_predicate: target_predicate})
+        self.assertEqual(gold_partitions.skipped_untyped_pairs, 0)
+
     def test_partition_alignment_mappings_skips_mixed_and_untyped_pairs(self) -> None:
         source_store = Store()
         target_store = Store()

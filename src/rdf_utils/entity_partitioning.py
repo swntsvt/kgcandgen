@@ -123,11 +123,17 @@ def extract_typed_entity_partitions(
     """Extract sorted class, predicate, instance, and untyped URI partitions."""
     explicit_classes: set[str] = set()
     explicit_predicates: set[str] = set()
-    subjects: set[str] = set()
+    candidate_uris: set[str] = set()
 
     for quad in store.quads_for_pattern(None, None, None, None):
         if isinstance(quad.subject, NamedNode):
-            subjects.add(quad.subject.value)
+            candidate_uris.add(quad.subject.value)
+        if (
+            isinstance(quad.predicate, NamedNode)
+            and "/property/" in quad.predicate.value
+        ):
+            # KG-track property entities can appear only in predicate position.
+            candidate_uris.add(quad.predicate.value)
         if (
             isinstance(quad.subject, NamedNode)
             and isinstance(quad.predicate, NamedNode)
@@ -144,7 +150,7 @@ def extract_typed_entity_partitions(
     instances: list[str] = []
     untyped: list[str] = []
 
-    for uri in sorted(subjects):
+    for uri in sorted(candidate_uris):
         entity_type = _classify_entity(
             uri,
             explicit_classes=explicit_classes,
