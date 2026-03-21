@@ -125,10 +125,17 @@ class ExperimentRunnerTests(unittest.TestCase):
 
         config_body = (
             f"""
-datasets:
+development_datasets:
   fixture_dataset:
     track: fixture_track
     version: "v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+heldout_datasets:
+  heldout_fixture:
+    track: kg
+    version: "heldout-v1"
     source_rdf: {source_path}
     target_rdf: {target_path}
     alignment_rdf: {alignment_path}
@@ -139,7 +146,20 @@ datasets:
         if include_experiments:
             config_body += "\n" + (experiments_yaml or _default_experiments_yaml()).strip() + "\n"
 
-        config_path = tmp / "datasets.yaml"
+        config_body += (
+            "\n"
+            + """
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank
+""".strip()
+            + "\n"
+        )
+
+        config_path = tmp / "runtime.yaml"
         config_path.write_text(config_body, encoding="utf-8")
         return config_path
 
@@ -314,10 +334,10 @@ experiments:
             target_path.write_text(_target_rdf(), encoding="utf-8")
             alignment_path.write_text(_alignment_rdf(), encoding="utf-8")
 
-            config_path = tmp / "datasets.yaml"
+            config_path = tmp / "runtime.yaml"
             config_path.write_text(
                 f"""
-datasets:
+development_datasets:
   z_dataset:
     track: fixture_track
     version: "v1"
@@ -327,6 +347,13 @@ datasets:
   a_dataset:
     track: fixture_track
     version: "v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+heldout_datasets:
+  heldout_fixture:
+    track: kg
+    version: "heldout-v1"
     source_rdf: {source_path}
     target_rdf: {target_path}
     alignment_rdf: {alignment_path}
@@ -340,6 +367,12 @@ experiments:
   bm25_grid:
     - k1: 1.5
       b: 0.75
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank
 """.strip()
                 + "\n",
                 encoding="utf-8",

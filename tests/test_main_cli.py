@@ -63,16 +63,9 @@ class MainCliTests(unittest.TestCase):
         target_path.write_text(_target_rdf(), encoding="utf-8")
         alignment_path.write_text(_alignment_rdf(), encoding="utf-8")
 
-        config_path = tmp / "datasets.yaml"
+        config_path = tmp / "runtime.yaml"
         config_path.write_text(
             f"""
-datasets:
-  fixture_dataset:
-    track: fixture_track
-    version: "v1"
-    source_rdf: {source_path}
-    target_rdf: {target_path}
-    alignment_rdf: {alignment_path}
 experiments:
   evaluation_ks: [1, 5, 10, 20, 50]
   tfidf_grid:
@@ -89,6 +82,26 @@ experiments:
       b: 0.75
     - k1: 1.2
       b: 0.75
+development_datasets:
+  fixture_dataset:
+    track: fixture_track
+    version: "v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+heldout_datasets:
+  heldout_fixture:
+    track: kg
+    version: "heldout-v1"
+    source_rdf: {source_path}
+    target_rdf: {target_path}
+    alignment_rdf: {alignment_path}
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank
 """.strip()
             + "\n",
             encoding="utf-8",
@@ -169,7 +182,7 @@ experiments:
                 os.chdir(tmp_path)
                 with patch("src.main.run_experiments", return_value=[]):
                     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                        exit_code = main(["--config-path", "config/datasets.yaml"])
+                        exit_code = main(["--config-path", "config/runtime.yaml"])
             finally:
                 os.chdir(old_cwd)
 
@@ -179,7 +192,7 @@ experiments:
     def test_cli_progress_flag_passes_true(self) -> None:
         with patch("src.main.run_experiments") as run_mock:
             with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
-                exit_code = main(["--config-path", "config/datasets.yaml", "--progress"])
+                exit_code = main(["--config-path", "config/runtime.yaml", "--progress"])
 
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
@@ -188,7 +201,7 @@ experiments:
     def test_cli_no_progress_flag_passes_false(self) -> None:
         with patch("src.main.run_experiments") as run_mock:
             with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
-                exit_code = main(["--config-path", "config/datasets.yaml", "--no-progress"])
+                exit_code = main(["--config-path", "config/runtime.yaml", "--no-progress"])
 
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
@@ -197,7 +210,7 @@ experiments:
     def test_cli_default_progress_passes_none(self) -> None:
         with patch("src.main.run_experiments") as run_mock:
             with patch("src.main._resolve_new_result_file", return_value=Path("results/result_x.csv")):
-                exit_code = main(["--config-path", "config/datasets.yaml"])
+                exit_code = main(["--config-path", "config/runtime.yaml"])
 
         self.assertEqual(exit_code, 0)
         run_mock.assert_called_once()
@@ -285,7 +298,7 @@ experiments:
                             "--results-csv",
                             str(tmp / "result_fixture.csv"),
                             "--config-path",
-                            str(tmp / "datasets.yaml"),
+                            str(tmp / "runtime.yaml"),
                             "--output-dir",
                             str(output_dir),
                         ]
@@ -294,7 +307,7 @@ experiments:
             self.assertEqual(exit_code, 0)
             sensitivity_mock.assert_called_once_with(
                 results_csv_path=str(tmp / "result_fixture.csv"),
-                config_path=str(tmp / "datasets.yaml"),
+                config_path=str(tmp / "runtime.yaml"),
                 output_dir=str(output_dir),
             )
             self.assertIn(f"TF-IDF Sensitivity Dir: {output_dir}", stdout.getvalue())
@@ -311,7 +324,7 @@ experiments:
         self.assertEqual(exit_code, 0)
         sensitivity_mock.assert_called_once_with(
             results_csv_path=None,
-            config_path="config/datasets.yaml",
+            config_path="config/runtime.yaml",
             output_dir="results/comparisons",
         )
         self.assertIn("TF-IDF Sensitivity Dir:", stdout.getvalue())
@@ -333,7 +346,7 @@ experiments:
                             "--results-csv",
                             str(tmp / "result_fixture.csv"),
                             "--config-path",
-                            str(tmp / "datasets.yaml"),
+                            str(tmp / "runtime.yaml"),
                             "--output-dir",
                             str(output_dir),
                         ]
@@ -342,7 +355,7 @@ experiments:
             self.assertEqual(exit_code, 0)
             sensitivity_mock.assert_called_once_with(
                 results_csv_path=str(tmp / "result_fixture.csv"),
-                config_path=str(tmp / "datasets.yaml"),
+                config_path=str(tmp / "runtime.yaml"),
                 output_dir=str(output_dir),
             )
             self.assertIn(f"BM25 Sensitivity Dir: {output_dir}", stdout.getvalue())
@@ -359,10 +372,72 @@ experiments:
         self.assertEqual(exit_code, 0)
         sensitivity_mock.assert_called_once_with(
             results_csv_path=None,
-            config_path="config/datasets.yaml",
+            config_path="config/runtime.yaml",
             output_dir="results/comparisons",
         )
         self.assertIn("BM25 Sensitivity Dir:", stdout.getvalue())
+
+    def test_heldout_selection_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_heldout_selection",
+                return_value={"output_dir": output_dir},
+            ) as heldout_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "select-heldout-settings",
+                            "--results-csv",
+                            str(tmp / "result_fixture.csv"),
+                            "--config-path",
+                            str(tmp / "runtime.yaml"),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            heldout_mock.assert_called_once_with(
+                results_csv_path=str(tmp / "result_fixture.csv"),
+                config_path=str(tmp / "runtime.yaml"),
+                output_dir=str(output_dir),
+            )
+            self.assertIn(f"Held-Out Selection Dir: {output_dir}", stdout.getvalue())
+
+    def test_heldout_selection_default_args(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.main.generate_heldout_selection",
+            return_value={"output_dir": Path("results/comparisons/result_x")},
+        ) as heldout_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["select-heldout-settings"])
+
+        self.assertEqual(exit_code, 0)
+        heldout_mock.assert_called_once_with(
+            results_csv_path=None,
+            config_path="config/runtime.yaml",
+            output_dir="results/comparisons",
+        )
+        self.assertIn("Held-Out Selection Dir:", stdout.getvalue())
+
+    def test_heldout_selection_failure_path(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch(
+                "src.main.generate_heldout_selection",
+                side_effect=ValueError("bad heldout input"),
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["select-heldout-settings"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: bad heldout input", stderr.getvalue())
+        self.assertIn("CLI execution failed", "\n".join(captured.output))
 
     def test_depth_analysis_explicit_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -449,7 +524,7 @@ experiments:
                                         [
                                             "full-run",
                                             "--config-path",
-                                            "config/datasets.yaml",
+                                            "config/runtime.yaml",
                                             "--output-dir",
                                             "results/comparisons",
                                             "--no-progress",
@@ -468,7 +543,7 @@ experiments:
             ],
         )
         run_mock.assert_called_once_with(
-            config_path="config/datasets.yaml",
+            config_path="config/runtime.yaml",
             output_csv_path=None,
             show_progress=False,
         )
@@ -479,12 +554,12 @@ experiments:
         )
         tfidf_mock.assert_called_once_with(
             results_csv_path=resolved_csv,
-            config_path="config/datasets.yaml",
+            config_path="config/runtime.yaml",
             output_dir="results/comparisons",
         )
         bm25_mock.assert_called_once_with(
             results_csv_path=resolved_csv,
-            config_path="config/datasets.yaml",
+            config_path="config/runtime.yaml",
             output_dir="results/comparisons",
         )
         depth_mock.assert_called_once_with(
@@ -527,7 +602,7 @@ experiments:
                                         [
                                             "full-run",
                                             "--config-path",
-                                            "config/datasets.yaml",
+                                            "config/runtime.yaml",
                                             "--output-csv-path",
                                             str(output_csv),
                                             "--output-dir",
@@ -629,6 +704,7 @@ experiments:
         self.assertIn("tfidf-sensitivity", help_text)
         self.assertIn("depth-analysis", help_text)
         self.assertIn("bm25-sensitivity", help_text)
+        self.assertIn("select-heldout-settings", help_text)
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
 

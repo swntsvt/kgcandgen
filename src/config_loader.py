@@ -1,4 +1,4 @@
-"""Dataset configuration loading utilities."""
+"""Runtime configuration loading utilities."""
 
 from __future__ import annotations
 
@@ -10,6 +10,15 @@ from typing import Any
 import yaml
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CONFIG_PATH = "config/runtime.yaml"
+
+REQUIRED_HELDOUT_SELECTION_POLICY = {
+    "metric": "mrr",
+    "lambda": 0.5,
+    "weighting": "equal_track_weight",
+    "ranking": "per_track_normalized_rank",
+}
 
 
 @dataclass(frozen=True)
@@ -52,11 +61,43 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True)
-class RuntimeConfig:
-    """Top-level runtime configuration with datasets and experiments."""
+class HeldoutSelectionPolicy:
+    """Held-out setting selection policy."""
 
-    datasets: dict[str, DatasetConfig]
+    metric: str
+    lambda_penalty: float
+    weighting: str
+    ranking: str
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "metric": self.metric,
+            "lambda": self.lambda_penalty,
+            "weighting": self.weighting,
+            "ranking": self.ranking,
+        }
+
+
+@dataclass(frozen=True)
+class HeldoutConfig:
+    """Top-level held-out workflow configuration."""
+
+    selection: HeldoutSelectionPolicy
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """Top-level runtime configuration with dataset splits and experiments."""
+
+    development_datasets: dict[str, DatasetConfig]
+    heldout_datasets: dict[str, DatasetConfig]
     experiments: ExperimentConfig
+    heldout: HeldoutConfig
+
+    @property
+    def datasets(self) -> dict[str, DatasetConfig]:
+        """Backward-compatible alias for development datasets."""
+        return self.development_datasets
 
 
 def _ensure_mapping(value: Any, field_path: str) -> dict[str, Any]:
@@ -103,25 +144,33 @@ def _load_config_content(path: Path) -> dict[str, Any]:
     return content
 
 
-def _validate_datasets(raw_datasets: Any, path: Path) -> dict[str, DatasetConfig]:
-    datasets = _ensure_mapping(raw_datasets, "datasets")
-    logger.info("Discovered %d dataset entry(ies) in %s", len(datasets), path)
+def _validate_dataset_group(
+    raw_datasets: Any,
+    *,
+    field_name: str,
+    path: Path,
+) -> dict[str, DatasetConfig]:
+    datasets = _ensure_mapping(raw_datasets, field_name)
+    logger.info("Discovered %d dataset entry(ies) in %s.%s", len(datasets), path, field_name)
 
     loaded: dict[str, DatasetConfig] = {}
     required_fields = ("track", "version", "source_rdf", "target_rdf", "alignment_rdf")
 
     for dataset_name, raw_config in datasets.items():
         if not isinstance(raw_config, dict):
-            logger.error("Dataset '%s' must be a mapping", dataset_name)
-            raise ValueError(f"Dataset '{dataset_name}' must be a mapping.")
+            logger.error("%s '%s' must be a mapping", field_name, dataset_name)
+            raise ValueError(f"{field_name} '{dataset_name}' must be a mapping.")
 
         missing = [field for field in required_fields if field not in raw_config]
         if missing:
             missing_str = ", ".join(missing)
             logger.error(
-                "Dataset '%s' missing required fields: %s", dataset_name, missing_str
+                "%s '%s' missing required fields: %s",
+                field_name,
+                dataset_name,
+                missing_str,
             )
-            raise ValueError(f"Dataset '{dataset_name}' missing required fields: {missing_str}")
+            raise ValueError(f"{field_name} '{dataset_name}' missing required fields: {missing_str}")
 
         source_rdf = Path(raw_config["source_rdf"])
         target_rdf = Path(raw_config["target_rdf"])
@@ -134,13 +183,14 @@ def _validate_datasets(raw_datasets: Any, path: Path) -> dict[str, DatasetConfig
         ):
             if not rdf_path.exists():
                 logger.error(
-                    "Dataset '%s' has missing file for '%s': %s",
+                    "%s '%s' has missing file for '%s': %s",
+                    field_name,
                     dataset_name,
                     label,
                     rdf_path,
                 )
                 raise FileNotFoundError(
-                    f"Dataset '{dataset_name}' has missing file for '{label}': {rdf_path}"
+                    f"{field_name} '{dataset_name}' has missing file for '{label}': {rdf_path}"
                 )
 
         loaded[dataset_name] = DatasetConfig(
@@ -152,7 +202,8 @@ def _validate_datasets(raw_datasets: Any, path: Path) -> dict[str, DatasetConfig
             alignment_rdf=alignment_rdf,
         )
         logger.info(
-            "Validated dataset '%s' (track=%s, version=%s)",
+            "Validated %s '%s' (track=%s, version=%s)",
+            field_name,
             dataset_name,
             loaded[dataset_name].track,
             loaded[dataset_name].version,
@@ -265,30 +316,97 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
     )
 
 
-def load_runtime_config(config_path: str | Path = "config/datasets.yaml") -> RuntimeConfig:
-    """Load and validate dataset + experiment configuration from YAML."""
+def _validate_heldout_config(raw_heldout: Any) -> HeldoutConfig:
+    heldout = _ensure_mapping(raw_heldout, "heldout")
+    selection = _ensure_mapping(heldout.get("selection"), "heldout.selection")
+
+    metric = str(selection.get("metric"))
+    lambda_penalty = float(_ensure_number(selection.get("lambda"), "heldout.selection.lambda"))
+    weighting = str(selection.get("weighting"))
+    ranking = str(selection.get("ranking"))
+
+    expected = REQUIRED_HELDOUT_SELECTION_POLICY
+    mismatches: list[str] = []
+    if metric != expected["metric"]:
+        mismatches.append(f"metric={metric!r}")
+    if lambda_penalty != expected["lambda"]:
+        mismatches.append(f"lambda={lambda_penalty!r}")
+    if weighting != expected["weighting"]:
+        mismatches.append(f"weighting={weighting!r}")
+    if ranking != expected["ranking"]:
+        mismatches.append(f"ranking={ranking!r}")
+    if mismatches:
+        raise ValueError(
+            "heldout.selection must match the fixed supported policy: "
+            + ", ".join(f"{key}={value!r}" for key, value in expected.items())
+            + f". Got: {', '.join(mismatches)}"
+        )
+
+    logger.info(
+        "Validated heldout selection policy (metric=%s, lambda=%s, weighting=%s, ranking=%s)",
+        metric,
+        lambda_penalty,
+        weighting,
+        ranking,
+    )
+    return HeldoutConfig(
+        selection=HeldoutSelectionPolicy(
+            metric=metric,
+            lambda_penalty=lambda_penalty,
+            weighting=weighting,
+            ranking=ranking,
+        )
+    )
+
+
+def load_runtime_config(config_path: str | Path = DEFAULT_CONFIG_PATH) -> RuntimeConfig:
+    """Load and validate runtime configuration from YAML."""
     path = Path(config_path)
-    logger.info("Loading datasets config from %s", path)
+    logger.info("Loading runtime config from %s", path)
     content = _load_config_content(path)
 
-    if "datasets" not in content:
-        logger.error("Config missing 'datasets' mapping: %s", path)
-        raise ValueError("Config must contain a 'datasets' mapping.")
+    if "development_datasets" not in content:
+        logger.error("Config missing 'development_datasets' mapping: %s", path)
+        raise ValueError("Config must contain a 'development_datasets' mapping.")
+    if "heldout_datasets" not in content:
+        logger.error("Config missing 'heldout_datasets' mapping: %s", path)
+        raise ValueError("Config must contain a 'heldout_datasets' mapping.")
     if "experiments" not in content:
         logger.error("Config missing 'experiments' mapping: %s", path)
         raise ValueError("Config must contain an 'experiments' mapping.")
+    if "heldout" not in content:
+        logger.error("Config missing 'heldout' mapping: %s", path)
+        raise ValueError("Config must contain a 'heldout' mapping.")
 
-    datasets = _validate_datasets(content["datasets"], path)
-    experiments = _validate_experiment_config(content["experiments"])
-    logger.info(
-        "Loaded %d validated dataset config(s) from %s", len(datasets), path
+    development_datasets = _validate_dataset_group(
+        content["development_datasets"],
+        field_name="development_datasets",
+        path=path,
     )
-    return RuntimeConfig(datasets=datasets, experiments=experiments)
+    heldout_datasets = _validate_dataset_group(
+        content["heldout_datasets"],
+        field_name="heldout_datasets",
+        path=path,
+    )
+    experiments = _validate_experiment_config(content["experiments"])
+    heldout = _validate_heldout_config(content["heldout"])
+    logger.info(
+        "Loaded %d validated development dataset(s) and %d heldout dataset(s) from %s",
+        len(development_datasets),
+        len(heldout_datasets),
+        path,
+    )
+    return RuntimeConfig(
+        development_datasets=development_datasets,
+        heldout_datasets=heldout_datasets,
+        experiments=experiments,
+        heldout=heldout,
+    )
 
 
-def get_dataset_config(name: str, config_path: str | Path = "config/datasets.yaml") -> DatasetConfig:
-    """Return one dataset configuration by name."""
-    datasets = load_runtime_config(config_path=config_path).datasets
+def get_dataset_config(name: str, config_path: str | Path = DEFAULT_CONFIG_PATH) -> DatasetConfig:
+    """Return one development dataset configuration by name."""
+    datasets = load_runtime_config(config_path=config_path).development_datasets
     if name not in datasets:
         raise KeyError(f"Dataset '{name}' not found in config.")
     return datasets[name]

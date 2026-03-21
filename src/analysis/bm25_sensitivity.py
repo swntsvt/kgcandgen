@@ -537,7 +537,7 @@ def _write_interpretation_scaffold(
 
 def generate_bm25_sensitivity(
     results_csv_path: str | Path | None,
-    config_path: str | Path = "config/datasets.yaml",
+    config_path: str | Path = "config/runtime.yaml",
     output_dir: str | Path = "results/comparisons",
 ) -> dict[str, Path]:
     """Generate BM25 sensitivity summaries, stability outputs, and charts."""

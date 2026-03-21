@@ -5,6 +5,6 @@ logs/*.log
 results/
 results/result_*.csv
 data/
-config/datasets.yaml
+config/runtime.yaml
 .ipynb_checkpoints/
 .DS_Store

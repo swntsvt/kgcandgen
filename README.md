@@ -117,10 +117,10 @@ Plain-text note: candidate list order is treated as rank order; missing predicti
 Create your local dataset config from the example template:
 
 ```bash
-cp config/datasets.example.yaml config/datasets.yaml
+cp config/runtime.example.yaml config/runtime.yaml
 ```
 
-Then edit `config/datasets.yaml` with your local RDF and alignment file paths.
+Then edit `config/runtime.yaml` with your local RDF and alignment file paths.
 
 Expected schema:
 
@@ -142,13 +142,28 @@ experiments:
     - k1: 1.2
       b: 0.75
 
-datasets:
+development_datasets:
   <dataset_name>:
     track: <track_name>
     version: "<track_or_version_string>"
     source_rdf: /absolute/path/to/source.rdf
     target_rdf: /absolute/path/to/target.rdf
     alignment_rdf: /absolute/path/to/alignment.rdf
+
+heldout_datasets:
+  <heldout_dataset_name>:
+    track: <track_name>
+    version: "<heldout_version_string>"
+    source_rdf: /absolute/path/to/source.rdf
+    target_rdf: /absolute/path/to/target.rdf
+    alignment_rdf: /absolute/path/to/alignment.rdf
+
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank
 ```
 
 Config semantics and validation:
@@ -165,9 +180,12 @@ Config semantics and validation:
   - non-empty list
   - each entry requires `k1`, `b`
   - entries are executed in YAML order
-- `datasets.<name>`:
+- `development_datasets.<name>` and `heldout_datasets.<name>`:
   - requires `track`, `version`, `source_rdf`, `target_rdf`, `alignment_rdf`
   - RDF/alignment file paths are validated for existence before run starts
+- `heldout.selection`:
+  - currently fixed to `metric=mrr`, `lambda=0.5`, `weighting=equal_track_weight`, `ranking=per_track_normalized_rank`
+  - used to document and validate the frozen held-out selection policy
 
 ## Testing
 
@@ -196,7 +214,7 @@ python -m src.main
 With explicit config path:
 
 ```bash
-python -m src.main --config-path config/datasets.yaml
+python -m src.main --config-path config/runtime.yaml
 ```
 
 With explicit output CSV path:
@@ -226,7 +244,7 @@ python -m src.main full-run
 With explicit config/output controls:
 
 ```bash
-python -m src.main full-run --config-path config/datasets.yaml --output-csv-path results/my_run.csv --output-dir results/comparisons --no-progress
+python -m src.main full-run --config-path config/runtime.yaml --output-csv-path results/my_run.csv --output-dir results/comparisons --no-progress
 ```
 
 CLI behavior:
@@ -303,7 +321,7 @@ python -m src.main tfidf-sensitivity
 With explicit result CSV and config path:
 
 ```bash
-python -m src.main tfidf-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/datasets.yaml
+python -m src.main tfidf-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/runtime.yaml
 ```
 
 Artifacts are generated under:
@@ -380,7 +398,7 @@ python -m src.main bm25-sensitivity
 With explicit result CSV and config path:
 
 ```bash
-python -m src.main bm25-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/datasets.yaml
+python -m src.main bm25-sensitivity --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/runtime.yaml
 ```
 
 Artifacts are generated under:
@@ -405,6 +423,29 @@ Interpretation notes:
 
 - Performance summaries are computed on successful BM25 runs only.
 - Failure surface is represented explicitly by inferring missing `(dataset × bm25_grid)` rows.
+
+## Held-Out Setting Selection
+
+Use the held-out selection command to freeze exactly one TF-IDF setting and one BM25
+setting from development-track results using the configured stability-aware policy.
+
+With latest available result CSV (auto-detected):
+
+```bash
+python -m src.main select-heldout-settings
+```
+
+With explicit result CSV and config path:
+
+```bash
+python -m src.main select-heldout-settings --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/runtime.yaml
+```
+
+Generated files:
+
+- `heldout_selection_summary.csv`
+- `heldout_selected_settings.json`
+- `heldout_selection_manifest.md`
 - Top settings are ranked by mean MRR and include bootstrap percentile CI (fixed seed, 1000 samples).
 
 ## Logging
@@ -649,11 +690,11 @@ experiments across configured datasets and hyperparameter grids for both TF-IDF 
 
 Public API:
 
-- `run_experiments(config_path: str | Path = "config/datasets.yaml", output_csv_path: str | Path | None = None, show_progress: bool | None = None) -> list[dict]`
+- `run_experiments(config_path: str | Path = "config/runtime.yaml", output_csv_path: str | Path | None = None, show_progress: bool | None = None) -> list[dict]`
 
 What it does:
 
-1. Loads datasets and experiment settings from `config/datasets.yaml`.
+1. Loads datasets and experiment settings from `config/runtime.yaml`.
 2. Loads source/target RDF with strict-then-lenient RDF/XML fallback.
 3. Selects only `owl:Class` entities from both graphs.
 4. Extracts labels and parses/filter gold alignments.
@@ -722,7 +763,7 @@ Example:
 ```python
 from src.experiments.experiment_runner import run_experiments
 
-results = run_experiments("config/datasets.yaml")
+results = run_experiments("config/runtime.yaml")
 ```
 
 ## End-to-End Example (Config -> Run -> Result)
@@ -741,19 +782,34 @@ experiments:
     - k1: 1.5
       b: 0.75
 
-datasets:
+development_datasets:
   conference_v1:
     track: conference
     version: "1"
     source_rdf: /abs/path/source.rdf
     target_rdf: /abs/path/target.rdf
     alignment_rdf: /abs/path/alignment.rdf
+
+heldout_datasets:
+  kg_v1:
+    track: kg
+    version: "heldout-v1"
+    source_rdf: /abs/path/heldout_source.rdf
+    target_rdf: /abs/path/heldout_target.rdf
+    alignment_rdf: /abs/path/heldout_alignment.rdf
+
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank
 ```
 
 Run:
 
 ```bash
-python src/main.py --config-path config/datasets.yaml
+python src/main.py --config-path config/runtime.yaml
 ```
 
 CLI prints the generated file path:

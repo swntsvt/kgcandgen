@@ -212,7 +212,7 @@ def _format_recall_for_log(recalls: dict[int, float], evaluation_ks: list[int]) 
 
 
 def run_experiments(
-    config_path: str | Path = "config/datasets.yaml",
+    config_path: str | Path = "config/runtime.yaml",
     output_csv_path: str | Path | None = None,
     show_progress: bool | None = None,
 ) -> list[ExperimentResultRecord]:
@@ -224,7 +224,7 @@ def run_experiments(
     )
 
     runtime_config = load_runtime_config(config_path=config_path)
-    datasets = runtime_config.datasets
+    datasets = runtime_config.development_datasets
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
     model_runs = _build_model_runs(

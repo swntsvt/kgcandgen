@@ -15,6 +15,14 @@ from src.logging_utils import setup_logging
 logger = logging.getLogger("src.main")
 
 
+def generate_heldout_selection(
+    *, results_csv_path: str | Path | None, config_path: str | Path, output_dir: str | Path
+) -> dict[str, Path]:
+    from src.analysis.heldout_selection import generate_heldout_selection as _impl
+
+    return _impl(results_csv_path=results_csv_path, config_path=config_path, output_dir=output_dir)
+
+
 def generate_model_comparison(*, results_csv_path: str | Path | None, output_dir: str | Path) -> dict[str, Path]:
     from src.analysis.model_comparison import generate_model_comparison as _impl
 
@@ -46,8 +54,8 @@ def generate_depth_analysis(*, results_csv_path: str | Path | None, output_dir: 
 def _build_run_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config-path",
-        default="config/datasets.yaml",
-        help="Path to dataset YAML config (default: config/datasets.yaml).",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
     )
     parser.add_argument(
         "--output-csv-path",
@@ -97,8 +105,8 @@ def _build_tfidf_sensitivity_parser(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--config-path",
-        default="config/datasets.yaml",
-        help="Path to dataset YAML config (default: config/datasets.yaml).",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
     )
     parser.add_argument(
         "--output-dir",
@@ -118,13 +126,34 @@ def _build_bm25_sensitivity_parser(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--config-path",
-        default="config/datasets.yaml",
-        help="Path to dataset YAML config (default: config/datasets.yaml).",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
     )
     parser.add_argument(
         "--output-dir",
         default="results/comparisons",
         help="Directory where BM25 sensitivity artifacts are written (default: results/comparisons).",
+    )
+
+
+def _build_heldout_selection_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--results-csv",
+        default=None,
+        help=(
+            "Path to experiment results CSV. If omitted, the latest results/result_*.csv "
+            "is used."
+        ),
+    )
+    parser.add_argument(
+        "--config-path",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results/comparisons",
+        help="Directory where held-out selection artifacts are written (default: results/comparisons).",
     )
 
 
@@ -179,6 +208,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate BM25 hyperparameter sensitivity artifacts from results CSV.",
     )
     _build_bm25_sensitivity_parser(bm25_sensitivity_parser)
+
+    heldout_selection_parser = subparsers.add_parser(
+        "select-heldout-settings",
+        help="Freeze held-out TF-IDF and BM25 settings from development results.",
+    )
+    _build_heldout_selection_parser(heldout_selection_parser)
 
     depth_analysis_parser = subparsers.add_parser(
         "depth-analysis",
@@ -279,6 +314,16 @@ def _run_bm25_sensitivity_cli(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
     )
     print(f"BM25 Sensitivity Dir: {artifacts['output_dir']}")
+    return 0
+
+
+def _run_heldout_selection_cli(args: argparse.Namespace) -> int:
+    artifacts = generate_heldout_selection(
+        results_csv_path=args.results_csv,
+        config_path=args.config_path,
+        output_dir=args.output_dir,
+    )
+    print(f"Held-Out Selection Dir: {artifacts['output_dir']}")
     return 0
 
 
@@ -449,6 +494,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_tfidf_sensitivity_cli(args)
         if args.command == "bm25-sensitivity":
             return _run_bm25_sensitivity_cli(args)
+        if args.command == "select-heldout-settings":
+            return _run_heldout_selection_cli(args)
         if args.command == "depth-analysis":
             return _run_depth_analysis_cli(args)
         if args.command == "full-run":
