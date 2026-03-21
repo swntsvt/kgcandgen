@@ -472,6 +472,32 @@ Generated files:
 - `heldout_selected_settings.json`
 - `heldout_selection_manifest.md`
 
+## Held-Out KG Runner
+
+Use the dedicated held-out KG runner to evaluate frozen TF-IDF and BM25 settings by
+entity type across `heldout_datasets`.
+
+With latest selected-settings artifact (auto-detected):
+
+```bash
+python -m src.main run-heldout-kg
+```
+
+With explicit selected-settings artifact and config path:
+
+```bash
+python -m src.main run-heldout-kg --config-path config/runtime.yaml --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json
+```
+
+The held-out KG results CSV includes:
+
+- `entity_type`
+- `target_pool_size`
+- `retained_candidate_size`
+- `candidate_reduction_ratio`
+- fixed `recall_at_<k>` columns
+- `mrr`
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:

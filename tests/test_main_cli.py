@@ -439,6 +439,79 @@ heldout:
         self.assertIn("Error: ValueError: bad heldout input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
 
+    def test_run_heldout_kg_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_csv = tmp / "heldout.csv"
+            stdout = io.StringIO()
+
+            with patch("src.main.run_heldout_kg_experiments", return_value=[]) as heldout_mock:
+                output_csv.write_text("track,version\n", encoding="utf-8")
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "run-heldout-kg",
+                            "--config-path",
+                            str(tmp / "runtime.yaml"),
+                            "--selected-settings-json",
+                            str(tmp / "heldout_selected_settings.json"),
+                            "--output-csv-path",
+                            str(output_csv),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            heldout_mock.assert_called_once_with(
+                config_path=str(tmp / "runtime.yaml"),
+                selected_settings_path=str(tmp / "heldout_selected_settings.json"),
+                output_csv_path=str(output_csv),
+                show_progress=None,
+            )
+            self.assertIn(f"Held-Out KG Results CSV: {output_csv}", stdout.getvalue())
+
+    def test_run_heldout_kg_default_selected_settings_and_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            stdout = io.StringIO()
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                with patch("src.main.run_heldout_kg_experiments", return_value=[]) as heldout_mock:
+                    expected_output = tmp / "results" / "heldout_result_20260101_000000_deadbeef.csv"
+                    expected_output.parent.mkdir(parents=True, exist_ok=True)
+                    expected_output.write_text("track,version\n", encoding="utf-8")
+                    with patch(
+                        "src.main._resolve_new_heldout_result_file",
+                        return_value=expected_output,
+                    ):
+                        with contextlib.redirect_stdout(stdout):
+                            exit_code = main(["run-heldout-kg"])
+            finally:
+                os.chdir(old_cwd)
+
+        self.assertEqual(exit_code, 0)
+        heldout_mock.assert_called_once_with(
+            config_path="config/runtime.yaml",
+            selected_settings_path=None,
+            output_csv_path=None,
+            show_progress=None,
+        )
+        self.assertIn("Held-Out KG Results CSV:", stdout.getvalue())
+
+    def test_run_heldout_kg_failure_path(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch(
+                "src.main.run_heldout_kg_experiments",
+                side_effect=ValueError("bad heldout kg input"),
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["run-heldout-kg"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: bad heldout kg input", stderr.getvalue())
+        self.assertIn("CLI execution failed", "\n".join(captured.output))
+
     def test_depth_analysis_explicit_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -705,6 +778,7 @@ heldout:
         self.assertIn("depth-analysis", help_text)
         self.assertIn("bm25-sensitivity", help_text)
         self.assertIn("select-heldout-settings", help_text)
+        self.assertIn("run-heldout-kg", help_text)
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
 

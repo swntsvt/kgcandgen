@@ -51,6 +51,25 @@ def generate_depth_analysis(*, results_csv_path: str | Path | None, output_dir: 
     return _impl(results_csv_path=results_csv_path, output_dir=output_dir)
 
 
+def run_heldout_kg_experiments(
+    *,
+    config_path: str | Path,
+    selected_settings_path: str | Path | None,
+    output_csv_path: str | Path | None,
+    show_progress: bool | None,
+) -> list[dict[str, object]]:
+    from src.experiments.heldout_kg_runner import (
+        run_heldout_kg_experiments as _impl,
+    )
+
+    return _impl(
+        config_path=config_path,
+        selected_settings_path=selected_settings_path,
+        output_csv_path=output_csv_path,
+        show_progress=show_progress,
+    )
+
+
 def _build_run_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config-path",
@@ -173,6 +192,41 @@ def _build_depth_analysis_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config-path",
+        default="config/runtime.yaml",
+        help="Path to runtime YAML config (default: config/runtime.yaml).",
+    )
+    parser.add_argument(
+        "--selected-settings-json",
+        default=None,
+        help=(
+            "Path to heldout_selected_settings.json. If omitted, the latest "
+            "results/comparisons/**/heldout_selected_settings.json is used."
+        ),
+    )
+    parser.add_argument(
+        "--output-csv-path",
+        default=None,
+        help=(
+            "Output CSV path. If omitted, a heldout run-stamped file is created in results/ "
+            "(heldout_result_YYYYMMDD_HHMMSS_<gitsha>.csv)."
+        ),
+    )
+    progress_group = parser.add_mutually_exclusive_group()
+    progress_group.add_argument(
+        "--progress",
+        action="store_true",
+        help="Force-enable progress bars.",
+    )
+    progress_group.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Force-disable progress bars.",
+    )
+
+
 def _build_full_run_parser(parser: argparse.ArgumentParser) -> None:
     _build_run_parser(parser)
     parser.add_argument(
@@ -221,6 +275,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _build_depth_analysis_parser(depth_analysis_parser)
 
+    heldout_run_parser = subparsers.add_parser(
+        "run-heldout-kg",
+        help="Run frozen held-out KG evaluation by entity type.",
+    )
+    _build_run_heldout_kg_parser(heldout_run_parser)
+
     full_run_parser = subparsers.add_parser(
         "full-run",
         help="Run experiments and generate all analysis reports in one command.",
@@ -244,6 +304,30 @@ def _resolve_new_result_file(
     if not new_files:
         raise FileNotFoundError(
             "No new results file was created in 'results/' for this run."
+        )
+    return new_files[-1]
+
+
+def _collect_existing_heldout_result_files(
+    results_dir: Path = Path("results"),
+) -> set[Path]:
+    if not results_dir.exists():
+        return set()
+    return {
+        path.resolve() for path in results_dir.glob("heldout_result_*.csv")
+    }
+
+
+def _resolve_new_heldout_result_file(
+    existing_files: set[Path], results_dir: Path = Path("results")
+) -> Path:
+    current_files = {
+        path.resolve() for path in results_dir.glob("heldout_result_*.csv")
+    }
+    new_files = sorted(current_files - existing_files, key=lambda p: p.stat().st_mtime)
+    if not new_files:
+        raise FileNotFoundError(
+            "No new heldout_result_*.csv file was created in 'results/' for this run."
         )
     return new_files[-1]
 
@@ -333,6 +417,32 @@ def _run_depth_analysis_cli(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
     )
     print(f"Depth Analysis Dir: {artifacts['output_dir']}")
+    return 0
+
+
+def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
+    show_progress = _resolve_show_progress(args)
+    existing_files = (
+        _collect_existing_heldout_result_files()
+        if args.output_csv_path is None
+        else set()
+    )
+    run_heldout_kg_experiments(
+        config_path=args.config_path,
+        selected_settings_path=args.selected_settings_json,
+        output_csv_path=args.output_csv_path,
+        show_progress=show_progress,
+    )
+    final_output_path = (
+        Path(args.output_csv_path)
+        if args.output_csv_path
+        else _resolve_new_heldout_result_file(existing_files)
+    )
+    if not final_output_path.exists():
+        raise FileNotFoundError(
+            f"Expected held-out output CSV was not created: {final_output_path}"
+        )
+    print(f"Held-Out KG Results CSV: {final_output_path}")
     return 0
 
 
@@ -498,6 +608,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_selection_cli(args)
         if args.command == "depth-analysis":
             return _run_depth_analysis_cli(args)
+        if args.command == "run-heldout-kg":
+            return _run_heldout_kg_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
         return _run_experiment_cli(args)
