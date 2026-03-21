@@ -32,7 +32,7 @@ class TfidfSensitivityTests(unittest.TestCase):
                     "  bm25_grid:",
                     "    - k1: 1.2",
                     "      b: 0.75",
-                    "datasets:",
+                    "development_datasets:",
                     "  d1:",
                     "    track: biodiv",
                     '    version: "v1"',
@@ -45,6 +45,19 @@ class TfidfSensitivityTests(unittest.TestCase):
                     "    source_rdf: /tmp/does_not_matter_source.rdf",
                     "    target_rdf: /tmp/does_not_matter_target.rdf",
                     "    alignment_rdf: /tmp/does_not_matter_alignment.rdf",
+                    "heldout_datasets:",
+                    "  kg_d1:",
+                    "    track: kg",
+                    '    version: "heldout-v1"',
+                    "    source_rdf: /tmp/does_not_matter_source.rdf",
+                    "    target_rdf: /tmp/does_not_matter_target.rdf",
+                    "    alignment_rdf: /tmp/does_not_matter_alignment.rdf",
+                    "heldout:",
+                    "  selection:",
+                    "    metric: mrr",
+                    "    lambda: 0.5",
+                    "    weighting: equal_track_weight",
+                    "    ranking: per_track_normalized_rank",
                 ]
             )
             + "\n",
@@ -132,7 +145,7 @@ class TfidfSensitivityTests(unittest.TestCase):
     def test_generates_sensitivity_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             results = tmp / "result_fixture.csv"
             output_dir = tmp / "comparisons"
             self._write_config(config)
@@ -172,7 +185,7 @@ class TfidfSensitivityTests(unittest.TestCase):
     def test_failure_inference_and_success_only_means(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             results = tmp / "result_fixture.csv"
             output_dir = tmp / "comparisons"
             self._write_config(config)
@@ -206,7 +219,7 @@ class TfidfSensitivityTests(unittest.TestCase):
     def test_invalid_hyperparameter_json_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             self._write_config(config)
             bad_results = tmp / "result_bad.csv"
             bad_results.write_text(

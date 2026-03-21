@@ -1,5 +1,5 @@
-# Example dataset configuration template
-# Copy this file to config/datasets.yaml and set real paths.
+# Example runtime configuration template
+# Copy this file to config/runtime.yaml and set real paths.
 
 experiments:
   evaluation_ks: [1, 5, 10, 20, 50]
@@ -18,10 +18,25 @@ experiments:
     - k1: 1.2
       b: 0.75
 
-datasets:
+development_datasets:
   conference_v1:
     track: conference
     version: "1"
     source_rdf: /Users/.../source.rdf
     target_rdf: /Users/.../target.rdf
     alignment_rdf: /Users/.../alignment.rdf
+
+heldout_datasets:
+  kg_track_heldout:
+    track: kg
+    version: "heldout-v1"
+    source_rdf: /Users/.../heldout_source.rdf
+    target_rdf: /Users/.../heldout_target.rdf
+    alignment_rdf: /Users/.../heldout_alignment.rdf
+
+heldout:
+  selection:
+    metric: mrr
+    lambda: 0.5
+    weighting: equal_track_weight
+    ranking: per_track_normalized_rank

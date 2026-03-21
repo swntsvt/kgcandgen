@@ -28,7 +28,7 @@ class Bm25SensitivityTests(unittest.TestCase):
                     "      b: 0.75",
                     "    - k1: 1.8",
                     "      b: 1.0",
-                    "datasets:",
+                    "development_datasets:",
                     "  d1:",
                     "    track: biodiv",
                     '    version: "v1"',
@@ -41,6 +41,19 @@ class Bm25SensitivityTests(unittest.TestCase):
                     f"    source_rdf: {source}",
                     f"    target_rdf: {target}",
                     f"    alignment_rdf: {alignment}",
+                    "heldout_datasets:",
+                    "  kg_d1:",
+                    "    track: kg",
+                    '    version: "heldout-v1"',
+                    f"    source_rdf: {source}",
+                    f"    target_rdf: {target}",
+                    f"    alignment_rdf: {alignment}",
+                    "heldout:",
+                    "  selection:",
+                    "    metric: mrr",
+                    "    lambda: 0.5",
+                    "    weighting: equal_track_weight",
+                    "    ranking: per_track_normalized_rank",
                 ]
             )
             + "\n",
@@ -127,7 +140,7 @@ class Bm25SensitivityTests(unittest.TestCase):
             target.write_text("", encoding="utf-8")
             alignment.write_text("", encoding="utf-8")
 
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             results = tmp / "result_fixture.csv"
             output_dir = tmp / "comparisons"
             self._write_config(config, source, target, alignment)
@@ -173,7 +186,7 @@ class Bm25SensitivityTests(unittest.TestCase):
             target.write_text("", encoding="utf-8")
             alignment.write_text("", encoding="utf-8")
 
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             results = tmp / "result_fixture.csv"
             output_dir = tmp / "comparisons"
             self._write_config(config, source, target, alignment)
@@ -212,7 +225,7 @@ class Bm25SensitivityTests(unittest.TestCase):
             target.write_text("", encoding="utf-8")
             alignment.write_text("", encoding="utf-8")
 
-            config = tmp / "datasets.yaml"
+            config = tmp / "runtime.yaml"
             self._write_config(config, source, target, alignment)
 
             bad_results = tmp / "result_bad.csv"
