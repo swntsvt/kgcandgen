@@ -23,6 +23,21 @@ def generate_heldout_selection(
     return _impl(results_csv_path=results_csv_path, config_path=config_path, output_dir=output_dir)
 
 
+def generate_kg_heldout_reporting(
+    *,
+    results_csv_path: str | Path | None,
+    output_dir: str | Path,
+    selected_settings_path: str | Path | None,
+) -> dict[str, Path]:
+    from src.analysis.kg_heldout_reporting import generate_kg_heldout_reporting as _impl
+
+    return _impl(
+        results_csv_path=results_csv_path,
+        output_dir=output_dir,
+        selected_settings_path=selected_settings_path,
+    )
+
+
 def generate_model_comparison(*, results_csv_path: str | Path | None, output_dir: str | Path) -> dict[str, Path]:
     from src.analysis.model_comparison import generate_model_comparison as _impl
 
@@ -192,6 +207,30 @@ def _build_depth_analysis_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_report_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--results-csv",
+        default=None,
+        help=(
+            "Path to held-out KG results CSV. If omitted, the latest results/heldout_result_*.csv "
+            "is used."
+        ),
+    )
+    parser.add_argument(
+        "--selected-settings-json",
+        default=None,
+        help=(
+            "Path to heldout_selected_settings.json. If omitted, the latest "
+            "results/comparisons/**/heldout_selected_settings.json is used when available."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        default="results/comparisons",
+        help="Directory where held-out reporting artifacts are written (default: results/comparisons).",
+    )
+
+
 def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config-path",
@@ -274,6 +313,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Generate retrieval-depth behavior artifacts from results CSV.",
     )
     _build_depth_analysis_parser(depth_analysis_parser)
+
+    report_heldout_kg_parser = subparsers.add_parser(
+        "report-heldout-kg",
+        help="Generate held-out KG reporting artifacts by entity type.",
+    )
+    _build_report_heldout_kg_parser(report_heldout_kg_parser)
 
     heldout_run_parser = subparsers.add_parser(
         "run-heldout-kg",
@@ -417,6 +462,16 @@ def _run_depth_analysis_cli(args: argparse.Namespace) -> int:
         output_dir=args.output_dir,
     )
     print(f"Depth Analysis Dir: {artifacts['output_dir']}")
+    return 0
+
+
+def _run_report_heldout_kg_cli(args: argparse.Namespace) -> int:
+    artifacts = generate_kg_heldout_reporting(
+        results_csv_path=args.results_csv,
+        output_dir=args.output_dir,
+        selected_settings_path=args.selected_settings_json,
+    )
+    print(f"Held-Out KG Report Dir: {artifacts['output_dir']}")
     return 0
 
 
@@ -608,6 +663,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_selection_cli(args)
         if args.command == "depth-analysis":
             return _run_depth_analysis_cli(args)
+        if args.command == "report-heldout-kg":
+            return _run_report_heldout_kg_cli(args)
         if args.command == "run-heldout-kg":
             return _run_heldout_kg_cli(args)
         if args.command == "full-run":
