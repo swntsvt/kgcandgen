@@ -439,6 +439,70 @@ heldout:
         self.assertIn("Error: ValueError: bad heldout input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
 
+    def test_report_heldout_kg_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            selected_json = tmp / "heldout_selected_settings.json"
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_kg_heldout_reporting",
+                return_value={"output_dir": output_dir},
+            ) as report_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "report-heldout-kg",
+                            "--results-csv",
+                            str(results_csv),
+                            "--selected-settings-json",
+                            str(selected_json),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            report_mock.assert_called_once_with(
+                results_csv_path=str(results_csv),
+                output_dir=str(output_dir),
+                selected_settings_path=str(selected_json),
+            )
+            self.assertIn(f"Held-Out KG Report Dir: {output_dir}", stdout.getvalue())
+
+    def test_report_heldout_kg_default_args(self) -> None:
+        stdout = io.StringIO()
+        with patch(
+            "src.main.generate_kg_heldout_reporting",
+            return_value={"output_dir": Path("results/comparisons/heldout_result_x")},
+        ) as report_mock:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["report-heldout-kg"])
+
+        self.assertEqual(exit_code, 0)
+        report_mock.assert_called_once_with(
+            results_csv_path=None,
+            output_dir="results/comparisons",
+            selected_settings_path=None,
+        )
+        self.assertIn("Held-Out KG Report Dir:", stdout.getvalue())
+
+    def test_report_heldout_kg_failure_path(self) -> None:
+        stderr = io.StringIO()
+        with self.assertLogs("src.main", level="ERROR") as captured:
+            with patch(
+                "src.main.generate_kg_heldout_reporting",
+                side_effect=ValueError("bad heldout reporting input"),
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    exit_code = main(["report-heldout-kg"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: ValueError: bad heldout reporting input", stderr.getvalue())
+        self.assertIn("CLI execution failed", "\n".join(captured.output))
+
     def test_run_heldout_kg_explicit_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -778,6 +842,7 @@ heldout:
         self.assertIn("depth-analysis", help_text)
         self.assertIn("bm25-sensitivity", help_text)
         self.assertIn("select-heldout-settings", help_text)
+        self.assertIn("report-heldout-kg", help_text)
         self.assertIn("run-heldout-kg", help_text)
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)

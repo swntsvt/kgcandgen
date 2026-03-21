@@ -498,6 +498,33 @@ The held-out KG results CSV includes:
 - fixed `recall_at_<k>` columns
 - `mrr`
 
+## Held-Out KG Reporting
+
+Use the held-out KG reporting command to summarize frozen TF-IDF and BM25 results by
+entity type and generate macro/micro summaries.
+
+With latest held-out results CSV and latest selected-settings artifact (auto-detected when
+available):
+
+```bash
+python -m src.main report-heldout-kg
+```
+
+With explicit held-out results CSV and selected-settings artifact:
+
+```bash
+python -m src.main report-heldout-kg --results-csv results/heldout_result_YYYYMMDD_HHMMSS_<gitsha>.csv --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json --output-dir results/comparisons
+```
+
+Generated files:
+
+- `kg_heldout_by_type_summary.csv`
+- `kg_heldout_macro_summary.csv`
+- `kg_heldout_micro_summary.csv`
+- `kg_heldout_reduction_effectiveness.csv`
+- `kg_heldout_interpretation_scaffold.md`
+- `kg_heldout_transfer_summary.csv` when a compatible selected-settings artifact is available
+
 ## Logging
 
 Experiment logs are written to timestamped files under `logs/`:
