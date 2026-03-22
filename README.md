@@ -55,14 +55,14 @@ dataset config
   -> class filtering (owl:Class)
   -> label extraction
   -> text preprocessing
-  -> lexical retrieval (TF-IDF / BM25)
+  -> lexical retrieval (TF-IDF / BM25 / exact_match)
   -> metric computation (Recall@k, MRR)
   -> CSV result storage
 ```
 
 Where methods fit:
 
-- **TF-IDF** and **BM25** are the candidate retrievers.
+- **TF-IDF**, **BM25**, and **exact_match** are the candidate retrievers.
 - **Recall@k** and **MRR** are computed on ranked candidate lists produced per source entity.
 
 Mathematical definitions (LaTeX-ready):
@@ -514,8 +514,8 @@ Artifact handoff:
 
 ## Held-Out KG Runner
 
-Use the dedicated held-out KG runner to evaluate frozen TF-IDF and BM25 settings by
-entity type across `heldout_datasets`.
+Use the dedicated held-out KG runner to evaluate frozen TF-IDF and BM25 settings, plus
+the fixed `exact_match` floor baseline, by entity type across `heldout_datasets`.
 
 With latest selected-settings artifact (auto-detected):
 
@@ -715,6 +715,28 @@ retriever.fit(
 )
 results = retriever.retrieve("plant height value", k=2)
 ```
+
+## Exact-Match Baseline
+
+Use `ExactMatchRetriever` from `src/retrieval/exact_match_retriever.py` for the fixed
+normalized exact-match baseline.
+
+Normalization policy:
+
+- lowercase
+- split camel case
+- normalize `-`, `_`, and `/` to spaces
+- strip punctuation
+- collapse repeated whitespace
+- keep stopwords
+
+Behavior:
+
+- candidates are returned only when the normalized source label exactly matches the
+  normalized target label
+- multiple matches are ranked deterministically by target URI
+- the baseline uses a fixed configuration and does not participate in held-out
+  hyperparameter selection
 
 ## BM25 Retrieval
 

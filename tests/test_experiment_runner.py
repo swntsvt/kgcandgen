@@ -173,10 +173,10 @@ heldout:
             self.assertTrue(output_csv_path.exists())
 
         self.assertTrue(results)
-        self.assertEqual(len(results), 4)  # 2 TF-IDF configs + 2 BM25 configs
+        self.assertEqual(len(results), 5)  # 2 TF-IDF configs + 2 BM25 configs + 1 exact match
 
         models = {row["model"] for row in results}
-        self.assertEqual(models, {"tfidf", "bm25"})
+        self.assertEqual(models, {"tfidf", "bm25", "exact_match"})
 
         for row in results:
             for key in (
@@ -251,7 +251,7 @@ heldout:
         self.assertEqual(len(rows), len(results))
         for row in rows:
             self.assertEqual(row["dataset"], "fixture_dataset")
-            self.assertIn(row["method"], {"tfidf", "bm25"})
+            self.assertIn(row["method"], {"tfidf", "bm25", "exact_match"})
             self.assertEqual(row["gold_count"], "2")
             self.assertEqual(row["candidate_size"], "3")
             json.loads(row["hyperparameters"])
@@ -288,8 +288,8 @@ experiments:
                 fieldnames = reader.fieldnames
                 rows = list(reader)
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual([row["model"] for row in results], ["tfidf", "bm25"])
+        self.assertEqual(len(results), 3)
+        self.assertEqual([row["model"] for row in results], ["tfidf", "bm25", "exact_match"])
         for row in results:
             self.assertEqual(list(row["recalls"].keys()), [2, 4])
 
@@ -310,7 +310,7 @@ experiments:
                 "runtime_seconds",
             ],
         )
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 3)
         self.assertTrue(all(row["gold_count"] == "2" for row in rows))
         self.assertTrue(all(row["candidate_size"] == "3" for row in rows))
 
@@ -384,7 +384,7 @@ heldout:
 
         self.assertEqual(
             [row["dataset_name"] for row in results],
-            ["z_dataset", "z_dataset", "a_dataset", "a_dataset"],
+            ["z_dataset", "z_dataset", "z_dataset", "a_dataset", "a_dataset", "a_dataset"],
         )
 
     def test_shared_preprocessing_runs_once_per_dataset(self) -> None:
@@ -412,7 +412,7 @@ heldout:
                     config_path=config_path, output_csv_path=output_csv_path
                 )
 
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 5)
         download_mock.assert_not_called()
 
     def test_best_effort_writes_successful_rows_only(self) -> None:
@@ -431,9 +431,9 @@ heldout:
             with output_csv_path.open("r", encoding="utf-8", newline="") as csv_file:
                 rows = list(csv.DictReader(csv_file))
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual(len(rows), 2)
-        self.assertTrue(all(row["method"] == "bm25" for row in rows))
+        self.assertEqual(len(results), 3)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row["method"] for row in rows}, {"bm25", "exact_match"})
 
     def test_csv_persistence_failure_does_not_abort_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -445,7 +445,7 @@ heldout:
             ):
                 results = run_experiments(config_path=config_path)
 
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 5)
 
     def test_runner_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -483,7 +483,7 @@ heldout:
         self.assertIn("Processing dataset 'fixture_dataset'", combined)
         self.assertIn("Finished dataset 'fixture_dataset' model runs", combined)
         self.assertIn("Run summary:", combined)
-        self.assertIn("successful_model_runs=4", combined)
+        self.assertIn("successful_model_runs=5", combined)
         self.assertIn("failed_model_runs=0", combined)
 
     def test_runner_failure_logs_include_summary(self) -> None:
@@ -513,7 +513,7 @@ heldout:
                 show_progress=False,
             )
 
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 5)
 
     def test_runner_with_show_progress_true_uses_tqdm(self) -> None:
         call_count = 0
@@ -533,8 +533,18 @@ heldout:
                     show_progress=True,
                 )
 
-        self.assertEqual(len(results), 4)
+        self.assertEqual(len(results), 5)
         self.assertGreater(call_count, 0)
+
+    def test_exact_match_rows_use_fixed_payload_and_match_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            results = run_experiments(config_path=config_path, show_progress=False)
+
+        exact_row = next(row for row in results if row["model"] == "exact_match")
+        self.assertEqual(exact_row["hyperparameters"], {"normalization": "light_v1"})
+        self.assertEqual(exact_row["mrr"], 1.0)
+        self.assertEqual(exact_row["recalls"][1], 1.0)
 
 
 if __name__ == "__main__":
