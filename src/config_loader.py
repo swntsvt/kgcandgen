@@ -34,6 +34,11 @@ class DatasetConfig:
 
 
 @dataclass(frozen=True)
+class SecondaryHeldoutDatasetConfig(DatasetConfig):
+    """Secondary held-out dataset configuration."""
+
+
+@dataclass(frozen=True)
 class TfidfGridEntry:
     """Validated TF-IDF hyperparameter entry."""
 
@@ -91,6 +96,7 @@ class RuntimeConfig:
 
     development_datasets: dict[str, DatasetConfig]
     heldout_datasets: dict[str, DatasetConfig]
+    heldout_secondary_datasets: dict[str, SecondaryHeldoutDatasetConfig]
     experiments: ExperimentConfig
     heldout: HeldoutConfig | None
 
@@ -204,6 +210,70 @@ def _validate_dataset_group(
         logger.info(
             "Validated %s '%s' (track=%s, version=%s)",
             field_name,
+            dataset_name,
+            loaded[dataset_name].track,
+            loaded[dataset_name].version,
+        )
+    return loaded
+
+
+def _validate_secondary_heldout_dataset_group(
+    raw_datasets: Any,
+    *,
+    path: Path,
+) -> dict[str, SecondaryHeldoutDatasetConfig]:
+    datasets = _ensure_mapping(raw_datasets, "heldout_secondary_datasets")
+    logger.info(
+        "Discovered %d dataset entry(ies) in %s.heldout_secondary_datasets",
+        len(datasets),
+        path,
+    )
+
+    loaded: dict[str, SecondaryHeldoutDatasetConfig] = {}
+    required_fields = (
+        "track",
+        "version",
+        "source_rdf",
+        "target_rdf",
+        "alignment_rdf",
+    )
+
+    for dataset_name, raw_config in datasets.items():
+        if not isinstance(raw_config, dict):
+            raise ValueError(
+                f"heldout_secondary_datasets '{dataset_name}' must be a mapping."
+            )
+        missing = [field for field in required_fields if field not in raw_config]
+        if missing:
+            raise ValueError(
+                "heldout_secondary_datasets "
+                f"'{dataset_name}' missing required fields: {', '.join(missing)}"
+            )
+
+        source_rdf = Path(raw_config["source_rdf"])
+        target_rdf = Path(raw_config["target_rdf"])
+        alignment_rdf = Path(raw_config["alignment_rdf"])
+        for label, rdf_path in (
+            ("source_rdf", source_rdf),
+            ("target_rdf", target_rdf),
+            ("alignment_rdf", alignment_rdf),
+        ):
+            if not rdf_path.exists():
+                raise FileNotFoundError(
+                    "heldout_secondary_datasets "
+                    f"'{dataset_name}' has missing file for '{label}': {rdf_path}"
+                )
+
+        loaded[dataset_name] = SecondaryHeldoutDatasetConfig(
+            name=dataset_name,
+            track=str(raw_config["track"]),
+            version=str(raw_config["version"]),
+            source_rdf=source_rdf,
+            target_rdf=target_rdf,
+            alignment_rdf=alignment_rdf,
+        )
+        logger.info(
+            "Validated heldout_secondary_datasets '%s' (track=%s, version=%s)",
             dataset_name,
             loaded[dataset_name].track,
             loaded[dataset_name].version,
@@ -396,6 +466,14 @@ def load_runtime_config(
         if "heldout_datasets" in content
         else {}
     )
+    heldout_secondary_datasets = (
+        _validate_secondary_heldout_dataset_group(
+            content["heldout_secondary_datasets"],
+            path=path,
+        )
+        if "heldout_secondary_datasets" in content
+        else {}
+    )
     experiments = _validate_experiment_config(content["experiments"])
     heldout = _validate_heldout_config(content["heldout"]) if "heldout" in content else None
     logger.info(
@@ -407,6 +485,7 @@ def load_runtime_config(
     return RuntimeConfig(
         development_datasets=development_datasets,
         heldout_datasets=heldout_datasets,
+        heldout_secondary_datasets=heldout_secondary_datasets,
         experiments=experiments,
         heldout=heldout,
     )

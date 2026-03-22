@@ -183,6 +183,14 @@ heldout_datasets:
     target_rdf: /absolute/path/to/target.rdf
     alignment_rdf: /absolute/path/to/alignment.rdf
 
+heldout_secondary_datasets:
+  <secondary_dataset_name>:
+    track: <track_name>
+    version: "<benchmark_version>"
+    source_rdf: /absolute/path/to/source.rdf
+    target_rdf: /absolute/path/to/target.rdf
+    alignment_rdf: /absolute/path/to/alignment.rdf
+
 heldout:
   selection:
     metric: mrr
@@ -208,6 +216,9 @@ Config semantics and validation:
 - `development_datasets.<name>` and `heldout_datasets.<name>`:
   - requires `track`, `version`, `source_rdf`, `target_rdf`, `alignment_rdf`
   - RDF/alignment file paths are validated for existence before run starts
+- `heldout_secondary_datasets.<name>`:
+  - requires `track`, `version`, `source_rdf`, `target_rdf`, `alignment_rdf`
+  - validates the same path existence checks as other dataset groups
 - `heldout.selection`:
   - currently fixed to `metric=mrr`, `lambda=0.5`, `weighting=equal_track_weight`, `ranking=per_track_normalized_rank`
   - used to document and validate the frozen held-out selection policy
@@ -617,6 +628,30 @@ python -m src.main heldout-full-run --config-path config/runtime.yaml --selected
 Generated provenance file:
 
 - `heldout_full_run_manifest.txt`
+
+## Secondary Class-Only Held-Out Workflow
+
+Use this secondary workflow to evaluate class-only held-out datasets while keeping
+KG typed held-out evaluation as the primary protocol.
+
+Class-only full run:
+
+```bash
+python -m src.main heldout-class-full-run --config-path config/runtime.yaml --dev-results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
+```
+
+Manual class-only workflow:
+
+```bash
+python -m src.main select-heldout-settings --results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv --config-path config/runtime.yaml
+python -m src.main run-heldout-class --config-path config/runtime.yaml --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json
+python -m src.main report-heldout-class --results-csv results/heldout_class_result_YYYYMMDD_HHMMSS_<gitsha>.csv --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json --output-dir results/comparisons
+```
+
+Secondary class-only outputs are separate from KG outputs and use the `class_heldout_*`
+artifact namespace. The class-only full run writes:
+
+- `heldout_class_full_run_manifest.txt`
 
 ## Logging
 
