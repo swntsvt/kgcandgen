@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import matplotlib
-matplotlib.use("Agg")
+from src.analysis import plot_env as _plot_env  # noqa: F401
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -30,6 +29,28 @@ BOOTSTRAP_SAMPLES = 1000
 
 class Bm25SensitivityValidationError(ValueError):
     """Raised when BM25 sensitivity input data is invalid."""
+
+
+def _coerce_count(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise TypeError(f"Unsupported count value: {value!r}")
+
+
+def _coerce_float(value: object) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Unsupported float value: {value!r}")
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
@@ -470,8 +491,8 @@ def _write_interpretation_scaffold(
         rank1 = top_settings.iloc[0]
         rank2 = top_settings.iloc[1]
         ci_overlap_with_rank2 = not (
-            float(rank2["mrr_ci_upper"]) < float(rank1["mrr_ci_lower"])
-            or float(rank2["mrr_ci_lower"]) > float(rank1["mrr_ci_upper"])
+            _coerce_float(rank2["mrr_ci_upper"]) < _coerce_float(rank1["mrr_ci_lower"])
+            or _coerce_float(rank2["mrr_ci_lower"]) > _coerce_float(rank1["mrr_ci_upper"])
         )
     lines = [
         "# BM25 Sensitivity Interpretation Scaffold",
@@ -483,8 +504,8 @@ def _write_interpretation_scaffold(
     if best_row is not None:
         lines.append(
             f"- Top setting by mean MRR: (k1={best_row['k1']}, b={best_row['b']}) "
-            f"with mean MRR={float(best_row['mrr_mean']):.4f} "
-            f"[95% CI: {float(best_row['mrr_ci_lower']):.4f}, {float(best_row['mrr_ci_upper']):.4f}]."
+            f"with mean MRR={_coerce_float(best_row['mrr_mean']):.4f} "
+            f"[95% CI: {_coerce_float(best_row['mrr_ci_lower']):.4f}, {_coerce_float(best_row['mrr_ci_upper']):.4f}]."
         )
     lines.extend(
         [
@@ -497,13 +518,13 @@ def _write_interpretation_scaffold(
     if most_stable_track is not None and most_sensitive_track is not None:
         lines.append(
             f"- Most stable track by MRR std: {most_stable_track['track']} "
-            f"(std={float(most_stable_track['mrr_std']):.4f}, "
-            f"datasets={int(most_stable_track['datasets_in_track'])})."
+            f"(std={_coerce_float(most_stable_track['mrr_std']):.4f}, "
+            f"datasets={_coerce_count(most_stable_track['datasets_in_track'])})."
         )
         lines.append(
             f"- Most sensitive track by MRR std: {most_sensitive_track['track']} "
-            f"(std={float(most_sensitive_track['mrr_std']):.4f}, "
-            f"datasets={int(most_sensitive_track['datasets_in_track'])})."
+            f"(std={_coerce_float(most_sensitive_track['mrr_std']):.4f}, "
+            f"datasets={_coerce_count(most_sensitive_track['datasets_in_track'])})."
         )
         lines.append(
             "- Caution: stability comparisons across tracks should account for "

@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 
+from src.method_registry import PRIMARY_COMPARISON_METHODS, ordered_method_names, supports_primary_comparison
+
 logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = {
@@ -27,12 +29,21 @@ REQUIRED_COLUMNS = {
     "mrr",
     "runtime_seconds",
 }
-REQUIRED_METHODS = {"tfidf", "bm25"}
 REQUIRED_ENTITY_TYPES = {"class", "predicate", "instance"}
 
 
 class KgHeldoutReportingValidationError(ValueError):
     """Raised when held-out reporting inputs are invalid."""
+
+
+def _coerce_float(value: object) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Unsupported float value: {value!r}")
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
@@ -110,7 +121,7 @@ def _find_recall_columns(frame: pd.DataFrame) -> list[str]:
     return sorted(recall_columns, key=lambda column: int(column.removeprefix("recall_at_")))
 
 
-def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
     missing_columns = sorted(REQUIRED_COLUMNS - set(frame.columns))
     if missing_columns:
         raise KgHeldoutReportingValidationError(
@@ -140,11 +151,10 @@ def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str
     for column in recall_columns:
         validated[column] = validated[column].astype(float)
 
-    methods = set(validated["method"].unique())
-    if methods != REQUIRED_METHODS:
+    methods = ordered_method_names(validated["method"].unique())
+    if not methods:
         raise KgHeldoutReportingValidationError(
-            "Held-out KG reporting requires exactly these methods: "
-            + ", ".join(sorted(REQUIRED_METHODS))
+            "Held-out KG reporting requires at least one method row."
         )
 
     entity_types = set(validated["entity_type"].unique())
@@ -159,11 +169,11 @@ def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str
         .nunique()
         .reset_index(name="method_count")
     )
-    incomplete = coverage[coverage["method_count"] != len(REQUIRED_METHODS)]
+    incomplete = coverage[coverage["method_count"] != len(methods)]
     if not incomplete.empty:
         bad = incomplete.iloc[0]
         raise KgHeldoutReportingValidationError(
-            "Each dataset/entity_type pair must have one TF-IDF row and one BM25 row. "
+            "Each dataset/entity_type pair must have one row for every reported method. "
             f"Found incomplete coverage for dataset='{bad['dataset']}', entity_type='{bad['entity_type']}'."
         )
 
@@ -183,10 +193,14 @@ def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str
 
     return validated.sort_values(
         ["track", "dataset", "entity_type", "method"], kind="mergesort"
-    ).reset_index(drop=True), recall_columns
+    ).reset_index(drop=True), recall_columns, methods
 
 
-def _build_by_type_summary(frame: pd.DataFrame, recall_columns: list[str]) -> pd.DataFrame:
+def _build_by_type_summary(
+    frame: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
     aggregation: dict[str, str] = {
         "dataset": "count",
         "gold_count": "sum",
@@ -213,7 +227,13 @@ def _build_by_type_summary(frame: pd.DataFrame, recall_columns: list[str]) -> pd
             }
         )
     )
-    return summary.sort_values(["entity_type", "method"], kind="mergesort").reset_index(drop=True)
+    method_order = {method: index for index, method in enumerate(methods)}
+    summary["_method_order"] = summary["method"].map(
+        lambda value: method_order.get(str(value), len(method_order))
+    )
+    return summary.sort_values(
+        ["entity_type", "_method_order", "method"], kind="mergesort"
+    ).drop(columns="_method_order").reset_index(drop=True)
 
 
 def _delta_row(
@@ -223,16 +243,23 @@ def _delta_row(
     method_column: str = "method",
 ) -> dict[str, object]:
     indexed = frame.set_index(method_column)
-    if "tfidf" not in indexed.index or "bm25" not in indexed.index:
+    if not supports_primary_comparison(indexed.index):
         raise KgHeldoutReportingValidationError("Expected tfidf and bm25 rows for delta computation.")
 
     row: dict[str, object] = {method_column: "delta_tfidf_minus_bm25"}
     for column in value_columns:
-        row[column] = float(indexed.loc["tfidf", column] - indexed.loc["bm25", column])
+        row[column] = float(
+            indexed.loc[PRIMARY_COMPARISON_METHODS[0], column]
+            - indexed.loc[PRIMARY_COMPARISON_METHODS[1], column]
+        )
     return row
 
 
-def _build_macro_summary(by_type_summary: pd.DataFrame, recall_columns: list[str]) -> pd.DataFrame:
+def _build_macro_summary(
+    by_type_summary: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
     value_columns = [
         "dataset_count",
         "gold_count_sum",
@@ -243,7 +270,7 @@ def _build_macro_summary(by_type_summary: pd.DataFrame, recall_columns: list[str
         *(f"{column}_mean" for column in recall_columns),
     ]
     method_rows: list[dict[str, object]] = []
-    for method in sorted(REQUIRED_METHODS):
+    for method in methods:
         group = by_type_summary[by_type_summary["method"] == method].sort_values(
             ["entity_type"], kind="mergesort"
         )
@@ -253,10 +280,11 @@ def _build_macro_summary(by_type_summary: pd.DataFrame, recall_columns: list[str
         method_rows.append(row)
 
     summary = pd.DataFrame(method_rows)
-    summary = pd.concat(
-        [summary, pd.DataFrame([_delta_row(summary, value_columns=value_columns)])],
-        ignore_index=True,
-    )
+    if supports_primary_comparison(methods):
+        summary = pd.concat(
+            [summary, pd.DataFrame([_delta_row(summary, value_columns=value_columns)])],
+            ignore_index=True,
+        )
     summary = summary.rename(
         columns={
             "dataset_count": "dataset_count_macro_mean",
@@ -273,9 +301,13 @@ def _weighted_mean(values: pd.Series, weights: pd.Series) -> float:
     return float((values * weights).sum() / total_weight)
 
 
-def _build_micro_summary(frame: pd.DataFrame, recall_columns: list[str]) -> pd.DataFrame:
+def _build_micro_summary(
+    frame: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
     method_rows: list[dict[str, object]] = []
-    for method in sorted(REQUIRED_METHODS):
+    for method in methods:
         group = frame[frame["method"] == method].sort_values(
             ["track", "dataset", "entity_type"], kind="mergesort"
         )
@@ -305,14 +337,19 @@ def _build_micro_summary(frame: pd.DataFrame, recall_columns: list[str]) -> pd.D
         *recall_columns,
     ]
     summary = pd.DataFrame(method_rows)
-    summary = pd.concat(
-        [summary, pd.DataFrame([_delta_row(summary, value_columns=value_columns)])],
-        ignore_index=True,
-    )
+    if supports_primary_comparison(methods):
+        summary = pd.concat(
+            [summary, pd.DataFrame([_delta_row(summary, value_columns=value_columns)])],
+            ignore_index=True,
+        )
     return summary.sort_values(["method"], kind="mergesort").reset_index(drop=True)
 
 
-def _build_reduction_effectiveness(frame: pd.DataFrame, recall_columns: list[str]) -> pd.DataFrame:
+def _build_reduction_effectiveness(
+    frame: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
     base_columns = [
         "track",
         "version",
@@ -330,8 +367,14 @@ def _build_reduction_effectiveness(frame: pd.DataFrame, recall_columns: list[str
     ]
     enriched = frame[base_columns].copy()
 
+    if not supports_primary_comparison(methods):
+        return enriched.sort_values(
+            ["track", "dataset", "entity_type", "method"], kind="mergesort"
+        ).reset_index(drop=True)
+
+    primary_pair = frame[frame["method"].isin(PRIMARY_COMPARISON_METHODS)].copy()
     paired = (
-        frame.pivot(
+        primary_pair.pivot(
             index=["track", "version", "dataset", "entity_type"],
             columns="method",
             values=["candidate_reduction_ratio", "mrr", *recall_columns],
@@ -340,19 +383,31 @@ def _build_reduction_effectiveness(frame: pd.DataFrame, recall_columns: list[str
     )
 
     def paired_value(row: pd.Series, metric: str, method: str) -> float:
-        return float(paired.loc[(row["track"], row["version"], row["dataset"], row["entity_type"]), (metric, method)])
+        return _coerce_float(
+            paired.loc[
+                (row["track"], row["version"], row["dataset"], row["entity_type"]),
+                (metric, method),
+            ]
+        )
 
-    enriched["other_method"] = enriched["method"].map({"tfidf": "bm25", "bm25": "tfidf"})
+    other_method_map = {
+        PRIMARY_COMPARISON_METHODS[0]: PRIMARY_COMPARISON_METHODS[1],
+        PRIMARY_COMPARISON_METHODS[1]: PRIMARY_COMPARISON_METHODS[0],
+    }
+    enriched["other_method"] = enriched["method"].map(other_method_map)
     for metric in ["candidate_reduction_ratio", "mrr", *recall_columns]:
         delta_column = f"{metric}_delta_vs_other_method"
-        deltas: list[float] = []
+        deltas: list[float | None] = []
         for row in enriched.itertuples(index=False):
             current_method = str(row.method)
+            if current_method not in other_method_map:
+                deltas.append(None)
+                continue
             current_value = paired_value(pd.Series(row._asdict()), metric, current_method)
             other_value = paired_value(
                 pd.Series(row._asdict()),
                 metric,
-                "bm25" if current_method == "tfidf" else "tfidf",
+                other_method_map[current_method],
             )
             deltas.append(float(current_value - other_value))
         enriched[delta_column] = deltas
@@ -366,9 +421,12 @@ def _load_selected_settings_payload(
     selected_settings_path: Path | None,
     *,
     strict: bool,
+    methods: list[str],
 ) -> tuple[dict[str, dict[str, float]] | None, str | None]:
     if selected_settings_path is None:
         return None, "No uniquely matching selected-settings artifact was found; transfer summary skipped."
+    if not supports_primary_comparison(methods):
+        return None, "TF-IDF/BM25 pair not present; transfer summary skipped."
 
     try:
         payload = json.loads(selected_settings_path.read_text(encoding="utf-8"))
@@ -394,7 +452,7 @@ def _load_selected_settings_payload(
     selected_settings = payload["selected_settings"]
     transfer_payload: dict[str, dict[str, float]] = {}
     try:
-        for method in sorted(REQUIRED_METHODS):
+        for method in PRIMARY_COMPARISON_METHODS:
             entry = selected_settings[method]
             transfer_payload[method] = {
                 "development_selection_score": float(entry["heldout_score"]),
@@ -420,21 +478,25 @@ def _build_transfer_summary(
     macro_summary: pd.DataFrame,
     micro_summary: pd.DataFrame,
 ) -> pd.DataFrame:
-    macro_by_method = macro_summary[macro_summary["method"].isin(REQUIRED_METHODS)].set_index("method")
-    micro_by_method = micro_summary[micro_summary["method"].isin(REQUIRED_METHODS)].set_index("method")
+    macro_by_method = macro_summary[
+        macro_summary["method"].isin(PRIMARY_COMPARISON_METHODS)
+    ].set_index("method")
+    micro_by_method = micro_summary[
+        micro_summary["method"].isin(PRIMARY_COMPARISON_METHODS)
+    ].set_index("method")
 
     rows: list[dict[str, object]] = []
-    for method in sorted(REQUIRED_METHODS):
+    for method in PRIMARY_COMPARISON_METHODS:
         development = transfer_payload[method]
-        heldout_macro_mrr = float(macro_by_method.loc[method, "mrr_mean"])
-        heldout_micro_mrr = float(micro_by_method.loc[method, "mrr"])
-        development_mu = float(development["development_mu"])
+        heldout_macro_mrr = _coerce_float(macro_by_method.loc[method, "mrr_mean"])
+        heldout_micro_mrr = _coerce_float(micro_by_method.loc[method, "mrr"])
+        development_mu = _coerce_float(development["development_mu"])
         rows.append(
             {
                 "method": method,
-                "development_selection_score": float(development["development_selection_score"]),
+                "development_selection_score": _coerce_float(development["development_selection_score"]),
                 "development_mu": development_mu,
-                "development_sigma": float(development["development_sigma"]),
+                "development_sigma": _coerce_float(development["development_sigma"]),
                 "heldout_macro_mrr": heldout_macro_mrr,
                 "heldout_micro_mrr": heldout_micro_mrr,
                 "macro_transfer_gap": float(heldout_macro_mrr - development_mu),
@@ -456,27 +518,28 @@ def _write_interpretation_scaffold(
     primary_recall_column: str,
     transfer_summary: pd.DataFrame | None,
     transfer_note: str | None,
+    methods: list[str],
 ) -> None:
+    def _winner_label(group: pd.DataFrame, column: str) -> str:
+        best_value = float(group[column].max())
+        winners = ordered_method_names(
+            group[group[column] == best_value]["method"].astype(str).tolist()
+        )
+        if len(winners) == 1:
+            return f"`{winners[0]}`"
+        return "tie: " + ", ".join(f"`{method}`" for method in winners)
+
     winners: list[str] = []
     for entity_type in sorted(REQUIRED_ENTITY_TYPES):
-        group = by_type_summary[by_type_summary["entity_type"] == entity_type].set_index("method")
-        mrr_tfidf = float(group.loc["tfidf", "mrr_mean"])
-        mrr_bm25 = float(group.loc["bm25", "mrr_mean"])
-        recall_tfidf = float(group.loc["tfidf", f"{primary_recall_column}_mean"])
-        recall_bm25 = float(group.loc["bm25", f"{primary_recall_column}_mean"])
-
-        def _winner(left: float, right: float) -> str:
-            if left == right:
-                return "tie"
-            return "tfidf" if left > right else "bm25"
+        group = by_type_summary[by_type_summary["entity_type"] == entity_type].copy()
 
         winners.append(
-            f"- `{entity_type}`: MRR winner `{_winner(mrr_tfidf, mrr_bm25)}`, "
-            f"{primary_recall_column} winner `{_winner(recall_tfidf, recall_bm25)}`"
+            f"- `{entity_type}`: MRR winner {_winner_label(group, 'mrr_mean')}, "
+            f"{primary_recall_column} winner {_winner_label(group, f'{primary_recall_column}_mean')}"
         )
 
-    macro_rows = macro_summary[macro_summary["method"].isin(REQUIRED_METHODS)].set_index("method")
-    micro_rows = micro_summary[micro_summary["method"].isin(REQUIRED_METHODS)].set_index("method")
+    macro_rows = macro_summary[macro_summary["method"].isin(methods)].set_index("method")
+    micro_rows = micro_summary[micro_summary["method"].isin(methods)].set_index("method")
     reduction_snapshot = reduction_effectiveness[
         [
             "entity_type",
@@ -500,7 +563,7 @@ def _write_interpretation_scaffold(
         "## Coverage",
         "",
         "- Entity types covered: `class`, `predicate`, `instance`",
-        "- Methods compared: `tfidf`, `bm25`",
+        f"- Methods compared: {', '.join(f'`{method}`' for method in methods)}",
         "",
         "## Per-Type Winners",
         "",
@@ -508,20 +571,33 @@ def _write_interpretation_scaffold(
         "",
         "## Macro Summary",
         "",
-        f"- TF-IDF macro MRR: `{macro_rows.loc['tfidf', 'mrr_mean']:.6f}`",
-        f"- BM25 macro MRR: `{macro_rows.loc['bm25', 'mrr_mean']:.6f}`",
-        "",
-        "## Micro Summary",
-        "",
-        f"- TF-IDF micro MRR: `{micro_rows.loc['tfidf', 'mrr']:.6f}`",
-        f"- BM25 micro MRR: `{micro_rows.loc['bm25', 'mrr']:.6f}`",
-        "",
+    ]
+    for method in methods:
+        lines.append(f"- `{method}` macro MRR: `{macro_rows.loc[method, 'mrr_mean']:.6f}`")
+    lines.extend(
+        [
+            "",
+            "## Micro Summary",
+            "",
+        ]
+    )
+    for method in methods:
+        lines.append(f"- `{method}` micro MRR: `{micro_rows.loc[method, 'mrr']:.6f}`")
+    lines.extend(
+        [
+            "",
+        ]
+    )
+
+    lines.extend(
+        [
         "## Reduction vs Effectiveness Prompts",
         "",
         f"- Review `{primary_recall_column}` alongside `candidate_reduction_ratio` for each entity type.",
         "- Check whether the higher-reduction method also preserves MRR consistency across entity types.",
         "",
-    ]
+        ]
+    )
 
     if transfer_summary is not None:
         lines.extend(
@@ -569,13 +645,13 @@ def generate_kg_heldout_reporting(
     """Generate held-out KG reporting artifacts."""
     source_csv = _resolve_results_csv(results_csv_path)
     frame = pd.read_csv(source_csv)
-    validated, recall_columns = _validate_results_frame(frame)
+    validated, recall_columns, methods = _validate_results_frame(frame)
     heldout_datasets = set(validated["dataset"].unique())
 
-    by_type_summary = _build_by_type_summary(validated, recall_columns)
-    macro_summary = _build_macro_summary(by_type_summary, recall_columns)
-    micro_summary = _build_micro_summary(validated, recall_columns)
-    reduction_effectiveness = _build_reduction_effectiveness(validated, recall_columns)
+    by_type_summary = _build_by_type_summary(validated, recall_columns, methods)
+    macro_summary = _build_macro_summary(by_type_summary, recall_columns, methods)
+    micro_summary = _build_micro_summary(validated, recall_columns, methods)
+    reduction_effectiveness = _build_reduction_effectiveness(validated, recall_columns, methods)
 
     selected_settings_json, selected_settings_explicit = _resolve_selected_settings_json(
         selected_settings_path,
@@ -584,6 +660,7 @@ def generate_kg_heldout_reporting(
     transfer_payload, transfer_note = _load_selected_settings_payload(
         selected_settings_json,
         strict=selected_settings_explicit,
+        methods=methods,
     )
     transfer_summary = (
         _build_transfer_summary(transfer_payload, macro_summary, micro_summary)
@@ -621,6 +698,7 @@ def generate_kg_heldout_reporting(
         primary_recall_column=primary_recall_column,
         transfer_summary=transfer_summary,
         transfer_note=transfer_note,
+        methods=methods,
     )
 
     manifest_lines = [

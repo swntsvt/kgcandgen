@@ -6,22 +6,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.analysis.plot_env import configure_plot_environment
-
-configure_plot_environment()
-
-import matplotlib
-matplotlib.use("Agg")
+from src.analysis import plot_env as _plot_env  # noqa: F401
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
+from src.method_registry import PRIMARY_COMPARISON_METHODS
+
 REQUIRED_COLUMNS = {"dataset", "track", "method", "mrr", "recall_at_10", "recall_at_50"}
-REQUIRED_METHODS = {"tfidf", "bm25"}
 
 
 class ComparisonValidationError(ValueError):
     """Raised when comparison input data is invalid."""
+
+
+def _coerce_count(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise TypeError(f"Unsupported count value: {value!r}")
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
@@ -40,20 +48,23 @@ def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
     return candidates[-1].resolve()
 
 
-def _validate_results_frame(frame: pd.DataFrame) -> None:
+def _validate_results_frame(frame: pd.DataFrame) -> pd.DataFrame:
     missing_columns = sorted(REQUIRED_COLUMNS - set(frame.columns))
     if missing_columns:
         raise ComparisonValidationError(
             "Missing required comparison column(s): " + ", ".join(missing_columns)
         )
 
-    methods = set(frame["method"].astype(str).unique())
-    missing_methods = sorted(REQUIRED_METHODS - methods)
+    validated = frame.copy()
+    validated["method"] = validated["method"].astype(str)
+    methods = set(validated["method"].unique())
+    missing_methods = sorted(set(PRIMARY_COMPARISON_METHODS) - methods)
     if missing_methods:
         raise ComparisonValidationError(
             "Comparison requires both methods. Missing: "
             + ", ".join(missing_methods)
         )
+    return validated[validated["method"].isin(PRIMARY_COMPARISON_METHODS)].copy()
 
 
 def _sort_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -193,11 +204,12 @@ def _draw_best_mrr_dumbbell(best_frame: pd.DataFrame, output_base: Path) -> None
     fig_height = max(6, 0.35 * len(pivoted))
     fig, ax = plt.subplots(figsize=(12, fig_height), dpi=300)
 
-    y_positions = range(len(pivoted))
-    for idx, row in pivoted.iterrows():
+    y_positions = list(range(len(pivoted)))
+    for position, (_, row) in enumerate(pivoted.iterrows()):
+        line_y = [position, position]
         ax.plot(
             [row["tfidf"], row["bm25"]],
-            [idx, idx],
+            line_y,
             color="#9ca3af",
             linewidth=1.0,
             alpha=0.8,
@@ -269,9 +281,9 @@ def _write_interpretation_scaffold(
     def _winner_text(metric_row: Any) -> str:
         if metric_row is None:
             return "insufficient data"
-        if int(metric_row.tfidf_wins) == int(metric_row.bm25_wins):
+        if _coerce_count(metric_row.tfidf_wins) == _coerce_count(metric_row.bm25_wins):
             return "tie"
-        if int(metric_row.tfidf_wins) > int(metric_row.bm25_wins):
+        if _coerce_count(metric_row.tfidf_wins) > _coerce_count(metric_row.bm25_wins):
             return "TF-IDF"
         return "BM25"
 
@@ -285,7 +297,7 @@ def _write_interpretation_scaffold(
         if metric != "best_mrr":
             continue
         row = by_track_lookup[(track, metric)]
-        if int(row.bm25_wins) > int(row.tfidf_wins):
+        if _coerce_count(row.bm25_wins) > _coerce_count(row.tfidf_wins):
             bm25_mrr_tracks.append(track)
         else:
             tfidf_or_match_mrr_tracks.append(track)
@@ -320,23 +332,23 @@ def _write_interpretation_scaffold(
             (
                 "- Overall winner by MRR: "
                 f"{overall_mrr_winner} "
-                f"(tfidf_wins={int(mrr_row.tfidf_wins) if mrr_row else 0}, "
-                f"bm25_wins={int(mrr_row.bm25_wins) if mrr_row else 0}, "
-                f"ties={int(mrr_row.ties) if mrr_row else 0})."
+                f"(tfidf_wins={_coerce_count(mrr_row.tfidf_wins) if mrr_row else 0}, "
+                f"bm25_wins={_coerce_count(mrr_row.bm25_wins) if mrr_row else 0}, "
+                f"ties={_coerce_count(mrr_row.ties) if mrr_row else 0})."
             ),
             (
                 "- Overall winner by Recall@10: "
                 f"{overall_recall_winner} "
-                f"(tfidf_wins={int(recall_row.tfidf_wins) if recall_row else 0}, "
-                f"bm25_wins={int(recall_row.bm25_wins) if recall_row else 0}, "
-                f"ties={int(recall_row.ties) if recall_row else 0})."
+                f"(tfidf_wins={_coerce_count(recall_row.tfidf_wins) if recall_row else 0}, "
+                f"bm25_wins={_coerce_count(recall_row.bm25_wins) if recall_row else 0}, "
+                f"ties={_coerce_count(recall_row.ties) if recall_row else 0})."
             ),
             (
                 "- Overall winner by Recall@50: "
                 f"{overall_recall_50_winner} "
-                f"(tfidf_wins={int(recall_50_row.tfidf_wins) if recall_50_row else 0}, "
-                f"bm25_wins={int(recall_50_row.bm25_wins) if recall_50_row else 0}, "
-                f"ties={int(recall_50_row.ties) if recall_50_row else 0})."
+                f"(tfidf_wins={_coerce_count(recall_50_row.tfidf_wins) if recall_50_row else 0}, "
+                f"bm25_wins={_coerce_count(recall_50_row.bm25_wins) if recall_50_row else 0}, "
+                f"ties={_coerce_count(recall_50_row.ties) if recall_50_row else 0})."
             ),
             (
                 "- Tracks where BM25 clearly outperformed TF-IDF (best MRR view): "
@@ -370,7 +382,7 @@ def generate_model_comparison(
     """Generate TF-IDF vs BM25 model comparison outputs from an experiment CSV."""
     source_csv = _resolve_results_csv(results_csv_path)
     frame = pd.read_csv(source_csv)
-    _validate_results_frame(frame)
+    frame = _validate_results_frame(frame)
     if "hyperparameters" not in frame.columns:
         frame["hyperparameters"] = ""
 

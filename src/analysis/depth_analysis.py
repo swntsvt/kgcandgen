@@ -5,12 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from src.analysis.plot_env import configure_plot_environment
-
-configure_plot_environment()
-
-import matplotlib
-matplotlib.use("Agg")
+from src.analysis import plot_env as _plot_env  # noqa: F401
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -33,6 +28,28 @@ REQUIRED_COLUMNS = {
 
 class DepthAnalysisValidationError(ValueError):
     """Raised when depth-analysis input data is invalid."""
+
+
+def _coerce_count(value: object) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise TypeError(f"Unsupported count value: {value!r}")
+
+
+def _coerce_float(value: object) -> float:
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        return float(value)
+    raise TypeError(f"Unsupported float value: {value!r}")
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
@@ -96,21 +113,22 @@ def _select_best_settings(prepared: pd.DataFrame) -> pd.DataFrame:
 def _build_marginal_gains(best_settings: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for row in best_settings.itertuples(index=False):
+        candidate_size = _coerce_count(row.candidate_size)
         for from_k, to_k in TRANSITIONS:
             gain = float(getattr(row, f"recall_at_{to_k}") - getattr(row, f"recall_at_{from_k}"))
-            capped = int(row.candidate_size) < to_k
+            capped = candidate_size < to_k
             rows.append(
                 {
                     "track": str(row.track),
                     "dataset": str(row.dataset),
                     "method": str(row.method),
-                    "candidate_size": int(row.candidate_size),
+                    "candidate_size": candidate_size,
                     "from_k": from_k,
                     "to_k": to_k,
                     "transition": _transition_label(from_k, to_k),
                     "marginal_gain": gain,
                     "is_capped_before_to": capped,
-                    "effective_to_k": min(int(row.candidate_size), to_k),
+                    "effective_to_k": min(candidate_size, to_k),
                 }
             )
     return pd.DataFrame(rows).sort_values(
@@ -153,11 +171,12 @@ def _build_transition_coverage(marginal_gains: pd.DataFrame) -> pd.DataFrame:
     for transition, group in marginal_gains.groupby("transition", sort=False):
         total = int(len(group))
         capped = int(group["is_capped_before_to"].sum())
+        to_k = _coerce_count(group["to_k"].iloc[0])
         rows.append(
             {
                 "method": "ALL",
                 "transition": str(transition),
-                "to_k": int(group["to_k"].iloc[0]),
+                "to_k": to_k,
                 "total_count": total,
                 "full_coverage_count": total - capped,
                 "capped_count": capped,
@@ -168,11 +187,12 @@ def _build_transition_coverage(marginal_gains: pd.DataFrame) -> pd.DataFrame:
     for (method, transition), group in marginal_gains.groupby(["method", "transition"], sort=False):
         total = int(len(group))
         capped = int(group["is_capped_before_to"].sum())
+        to_k = _coerce_count(group["to_k"].iloc[0])
         rows.append(
             {
                 "method": str(method),
                 "transition": str(transition),
-                "to_k": int(group["to_k"].iloc[0]),
+                "to_k": to_k,
                 "total_count": total,
                 "full_coverage_count": total - capped,
                 "capped_count": capped,
@@ -194,7 +214,7 @@ def _draw_recall_gain_curves(best_settings: pd.DataFrame, output_root: Path) -> 
                 {
                     "method": str(row.method),
                     "k": depth,
-                    "recall": float(getattr(row, f"recall_at_{depth}")),
+                    "recall": _coerce_float(getattr(row, f"recall_at_{depth}")),
                 }
             )
     plot_data = pd.DataFrame(rows)
@@ -290,7 +310,7 @@ def _write_interpretation_scaffold(
 
     coverage_overall = coverage[coverage["method"] == "ALL"].copy().set_index("transition")
     capped_20_50 = (
-        float(coverage_overall.loc["20->50", "capped_rate"])
+        _coerce_float(coverage_overall.loc["20->50", "capped_rate"])
         if "20->50" in coverage_overall.index
         else 0.0
     )
