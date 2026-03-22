@@ -35,6 +35,7 @@ from src.rdf_utils.entity_partitioning import (
 )
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
+from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
 from src.retrieval.tfidf_retriever import TfidfRetriever
 
@@ -259,6 +260,17 @@ def _predict_for_method(
 
     if method_name == "exact_match":
         retriever = ExactMatchRetriever()
+        retriever.fit(target_entities, target_labels)
+        return {
+            source_id: retriever.retrieve(
+                source_label_map[source_id],
+                k=k_max,
+            )
+            for source_id in eval_sources
+        }
+
+    if method_name == "char_ngram":
+        retriever = CharNgramRetriever()
         retriever.fit(target_entities, target_labels)
         return {
             source_id: retriever.retrieve(

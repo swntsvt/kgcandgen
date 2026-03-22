@@ -23,6 +23,7 @@ from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_a
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
+from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
 from src.retrieval.tfidf_retriever import TfidfRetriever
 
@@ -205,6 +206,14 @@ def _build_exact_match_model_run() -> ModelRunSpec:
     )
 
 
+def _build_char_ngram_model_run() -> ModelRunSpec:
+    return ModelRunSpec(
+        model_name="char_ngram",
+        hyperparameters=fixed_method_hyperparameters("char_ngram"),
+        retriever=CharNgramRetriever(),
+    )
+
+
 def _build_model_runs(
     tfidf_grid: list[TfidfGridEntry], bm25_grid: list[Bm25GridEntry]
 ) -> list[ModelRunSpec]:
@@ -220,6 +229,9 @@ def _build_model_runs(
             continue
         if method_name == "exact_match":
             model_runs.append(_build_exact_match_model_run())
+            continue
+        if method_name == "char_ngram":
+            model_runs.append(_build_char_ngram_model_run())
             continue
         raise ValueError(f"Unsupported registered development method: {method_name}")
     return model_runs
@@ -385,6 +397,9 @@ def run_experiments(
                     elif run.model_name == "exact_match":
                         exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
                         exact_match_retriever.fit(target_entities, target_labels)
+                    elif run.model_name == "char_ngram":
+                        char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
+                        char_ngram_retriever.fit(target_entities, target_labels)
                     else:
                         raise ValueError(f"Unsupported model type: {run.model_name}")
 
@@ -406,9 +421,14 @@ def run_experiments(
                             predictions[source_id] = bm25_retriever.retrieve_tokenized(
                                 source_token_map[source_id], k=k_max
                             )
-                        else:
+                        elif run.model_name == "exact_match":
                             exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
                             predictions[source_id] = exact_match_retriever.retrieve(
+                                source_label_map[source_id], k=k_max
+                            )
+                        else:
+                            char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
+                            predictions[source_id] = char_ngram_retriever.retrieve(
                                 source_label_map[source_id], k=k_max
                             )
 

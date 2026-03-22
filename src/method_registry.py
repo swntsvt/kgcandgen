@@ -45,6 +45,17 @@ REGISTERED_METHODS: tuple[MethodDescriptor, ...] = (
         selected_settings_required=False,
         fixed_hyperparameters={"normalization": EXACT_MATCH_NORMALIZATION_VERSION},
     ),
+    MethodDescriptor(
+        name="char_ngram",
+        tunable=False,
+        fixed=True,
+        selected_settings_required=False,
+        fixed_hyperparameters={
+            "normalization": EXACT_MATCH_NORMALIZATION_VERSION,
+            "analyzer": "char_wb",
+            "ngram_range": [3, 5],
+        },
+    ),
 )
 
 REGISTERED_METHODS_BY_NAME = {descriptor.name: descriptor for descriptor in REGISTERED_METHODS}
