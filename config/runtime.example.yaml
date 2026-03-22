@@ -34,6 +34,14 @@ heldout_datasets:
     target_rdf: /Users/.../heldout_target.rdf
     alignment_rdf: /Users/.../heldout_alignment.rdf
 
+heldout_secondary_datasets:
+  class_only_2022_supervised_dataset_1:
+    track: bioml-supervised
+    version: "2022"
+    source_rdf: /Users/.../class_only_supervised_source.rdf
+    target_rdf: /Users/.../class_only_supervised_target.rdf
+    alignment_rdf: /Users/.../class_only_supervised_alignment.rdf
+
 heldout:
   selection:
     metric: mrr

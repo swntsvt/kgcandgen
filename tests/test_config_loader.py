@@ -5,6 +5,7 @@ from pathlib import Path
 from src.config_loader import (
     DatasetConfig,
     ExperimentConfig,
+    SecondaryHeldoutDatasetConfig,
     get_dataset_config,
     load_runtime_config,
 )
@@ -293,6 +294,37 @@ heldout:
             runtime = load_runtime_config(config_path)
 
         self.assertEqual(runtime.experiments.bm25_grid[0].k1, 0.0)
+
+    def test_secondary_heldout_class_only_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_path = self._write_valid_config(tmp)
+            source = tmp / "source.rdf"
+            target = tmp / "target.rdf"
+            alignment = tmp / "alignment.rdf"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8")
+                + "\n".join(
+                    [
+                        "heldout_secondary_datasets:",
+                        "  class_fixture:",
+                        "    track: bioml-supervised",
+                        '    version: "2022"',
+                        f"    source_rdf: {source}",
+                        f"    target_rdf: {target}",
+                        f"    alignment_rdf: {alignment}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            runtime = load_runtime_config(config_path)
+
+        self.assertIn("class_fixture", runtime.heldout_secondary_datasets)
+        self.assertIsInstance(
+            runtime.heldout_secondary_datasets["class_fixture"],
+            SecondaryHeldoutDatasetConfig,
+        )
+
 
 
 if __name__ == "__main__":

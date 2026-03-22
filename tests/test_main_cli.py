@@ -505,6 +505,39 @@ heldout:
         self.assertIn("Error: ValueError: bad heldout reporting input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
 
+    def test_report_heldout_class_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_class_result_fixture.csv"
+            selected_json = tmp / "heldout_selected_settings.json"
+            output_dir = tmp / "comparisons"
+            stdout = io.StringIO()
+
+            with patch(
+                "src.main.generate_class_heldout_reporting",
+                return_value={"output_dir": output_dir},
+            ) as report_mock:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "report-heldout-class",
+                            "--results-csv",
+                            str(results_csv),
+                            "--selected-settings-json",
+                            str(selected_json),
+                            "--output-dir",
+                            str(output_dir),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            report_mock.assert_called_once_with(
+                results_csv_path=str(results_csv),
+                output_dir=str(output_dir),
+                selected_settings_path=str(selected_json),
+            )
+            self.assertIn(f"Held-Out Class-Only Report Dir: {output_dir}", stdout.getvalue())
+
     def test_run_heldout_kg_explicit_args(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -582,6 +615,92 @@ heldout:
         self.assertEqual(exit_code, 1)
         self.assertIn("Error: ValueError: bad heldout kg input", stderr.getvalue())
         self.assertIn("CLI execution failed", "\n".join(captured.output))
+
+    def test_run_heldout_class_explicit_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            output_csv = tmp / "heldout_class.csv"
+            stdout = io.StringIO()
+
+            with patch("src.main.run_heldout_class_experiments", return_value=[]) as heldout_mock:
+                output_csv.write_text("track,version\n", encoding="utf-8")
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "run-heldout-class",
+                            "--config-path",
+                            str(tmp / "runtime.yaml"),
+                            "--selected-settings-json",
+                            str(tmp / "heldout_selected_settings.json"),
+                            "--output-csv-path",
+                            str(output_csv),
+                        ]
+                    )
+
+            self.assertEqual(exit_code, 0)
+            heldout_mock.assert_called_once_with(
+                config_path=str(tmp / "runtime.yaml"),
+                selected_settings_path=str(tmp / "heldout_selected_settings.json"),
+                output_csv_path=str(output_csv),
+                show_progress=None,
+            )
+            self.assertIn(f"Held-Out Class-Only Results CSV: {output_csv}", stdout.getvalue())
+
+    def test_heldout_class_full_run_wires_same_run_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            selected_settings = tmp / "comparisons" / "result_dev" / "heldout_selected_settings.json"
+            selected_settings.parent.mkdir(parents=True, exist_ok=True)
+            selected_settings.write_text('{"source_csv": "/tmp/dev.csv"}\n', encoding="utf-8")
+            heldout_csv = tmp / "results" / "heldout_class_result_fixture.csv"
+            heldout_csv.parent.mkdir(parents=True, exist_ok=True)
+            heldout_csv.write_text("track,version\n", encoding="utf-8")
+            report_output_dir = tmp / "comparisons" / "heldout_class_result_fixture"
+            report_output_dir.mkdir(parents=True, exist_ok=True)
+
+            with patch(
+                "src.main.generate_heldout_selection",
+                return_value={
+                    "source_csv": tmp / "results" / "result_dev.csv",
+                    "heldout_selected_settings": selected_settings,
+                },
+            ) as selection_mock:
+                with patch("src.main.run_heldout_class_experiments", return_value=[]) as heldout_mock:
+                    with patch(
+                        "src.main._resolve_new_heldout_class_result_file",
+                        return_value=heldout_csv.resolve(),
+                    ):
+                        with patch(
+                            "src.main.generate_class_heldout_reporting",
+                            return_value={"output_dir": report_output_dir},
+                        ) as report_mock:
+                            exit_code = main(
+                                [
+                                    "heldout-class-full-run",
+                                    "--config-path",
+                                    str(tmp / "runtime.yaml"),
+                                    "--dev-results-csv",
+                                    str(tmp / "results" / "result_dev.csv"),
+                                    "--output-dir",
+                                    str(tmp / "comparisons"),
+                                ]
+                            )
+
+            self.assertEqual(exit_code, 0)
+            selection_mock.assert_called_once()
+            heldout_mock.assert_called_once_with(
+                config_path=str(tmp / "runtime.yaml"),
+                selected_settings_path=selected_settings.resolve(),
+                output_csv_path=None,
+                show_progress=None,
+            )
+            report_mock.assert_called_once_with(
+                results_csv_path=heldout_csv.resolve(),
+                output_dir=str(tmp / "comparisons"),
+                selected_settings_path=selected_settings.resolve(),
+            )
+            manifest_path = report_output_dir / "heldout_class_full_run_manifest.txt"
+            self.assertTrue(manifest_path.exists())
 
     def test_heldout_full_run_wires_same_run_artifacts_and_writes_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1070,8 +1189,11 @@ heldout:
         self.assertIn("bm25-sensitivity", help_text)
         self.assertIn("select-heldout-settings", help_text)
         self.assertIn("report-heldout-kg", help_text)
+        self.assertIn("report-heldout-class", help_text)
         self.assertIn("run-heldout-kg", help_text)
+        self.assertIn("run-heldout-class", help_text)
         self.assertIn("heldout-full-run", help_text)
+        self.assertIn("heldout-class-full-run", help_text)
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
 
