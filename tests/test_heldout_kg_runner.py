@@ -240,6 +240,8 @@ class HeldoutKgRunnerTests(unittest.TestCase):
 
             self.assertEqual(len(results), 12)
             self.assertTrue(output_csv.exists())
+            query_csv = output_csv.with_name(f"{output_csv.stem}_query.csv")
+            self.assertTrue(query_csv.exists())
             with output_csv.open("r", encoding="utf-8", newline="") as csv_file:
                 reader = csv.DictReader(csv_file)
                 self.assertEqual(
@@ -262,12 +264,46 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                     ],
                 )
                 rows = list(reader)
+            with query_csv.open("r", encoding="utf-8", newline="") as csv_file:
+                query_reader = csv.DictReader(csv_file)
+                self.assertEqual(
+                    query_reader.fieldnames,
+                    [
+                        "track",
+                        "version",
+                        "dataset",
+                        "entity_type",
+                        "method",
+                        "hyperparameters",
+                        "source_entity",
+                        "source_label",
+                        "gold_target",
+                        "gold_target_label",
+                        "gold_rank",
+                        "retrieved_in_top_kmax",
+                        "retrieval_band",
+                    ],
+                )
+                query_rows = list(query_reader)
 
         self.assertEqual(len(rows), 12)
+        self.assertEqual(len(query_rows), 12)
         entity_types = {row["entity_type"] for row in rows}
         methods = {row["method"] for row in rows}
         self.assertEqual(entity_types, {"class", "predicate", "instance"})
         self.assertEqual(methods, {"tfidf", "bm25", "exact_match", "char_ngram"})
+        self.assertEqual({row["retrieval_band"] for row in query_rows}, {"strong"})
+        sort_keys = [
+            (
+                row["track"],
+                row["dataset"],
+                row["entity_type"],
+                row["method"],
+                row["source_entity"],
+            )
+            for row in query_rows
+        ]
+        self.assertEqual(sort_keys, sorted(sort_keys))
 
     def test_runner_uses_frozen_settings_not_grid_search(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -493,3 +529,35 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                 os.chdir(old_cwd)
 
         self.assertEqual(len(results), 12)
+
+    def test_query_rows_capture_ranks_and_bands(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            selected = tmp / "heldout_selected_settings.json"
+            output_csv = tmp / "results" / "heldout.csv"
+            self._write_selected_settings(selected)
+
+            run_heldout_kg_experiments(
+                config_path=config,
+                selected_settings_path=selected,
+                output_csv_path=output_csv,
+                show_progress=False,
+            )
+
+            query_csv = output_csv.with_name(f"{output_csv.stem}_query.csv")
+            with query_csv.open("r", encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertIn(row["retrieval_band"], {"strong", "weak", "missed"})
+            rank = int(row["gold_rank"])
+            if row["retrieval_band"] == "strong":
+                self.assertGreater(rank, 0)
+                self.assertLessEqual(rank, 10)
+            if row["retrieval_band"] == "weak":
+                self.assertGreaterEqual(rank, 11)
+                self.assertLessEqual(rank, 50)
+            if row["retrieval_band"] == "missed":
+                self.assertTrue(rank == 0 or rank > 50)

@@ -564,8 +564,20 @@ Generated files:
 - `kg_heldout_reduction_effectiveness.csv`
 - `kg_heldout_pairwise_by_type_inference.csv`
 - `kg_heldout_pairwise_overall_inference.csv`
+- `kg_heldout_error_cases.csv`
+- `kg_heldout_error_by_type_summary.csv`
+- `kg_heldout_error_interpretation.md`
 - `kg_heldout_interpretation_scaffold.md`
 - `kg_heldout_transfer_summary.csv` when a compatible selected-settings artifact is available
+
+Query-level error-analysis notes:
+
+- `run-heldout-kg` writes a paired query-level CSV (`heldout_query_result_*.csv`).
+- `report-heldout-kg` consumes that file automatically (or via `--query-level-csv`).
+- Retrieval bands are fixed as:
+  - `strong`: gold rank `1..10`
+  - `weak`: gold rank `11..50`
+  - `missed`: not retrieved within `k_max`
 
 Inferential testing design:
 

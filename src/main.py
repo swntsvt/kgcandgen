@@ -47,6 +47,7 @@ def generate_kg_heldout_reporting(
     results_csv_path: str | Path | None,
     output_dir: str | Path,
     selected_settings_path: str | Path | None,
+    query_level_csv_path: str | Path | None,
 ) -> dict[str, Path]:
     from src.analysis.kg_heldout_reporting import generate_kg_heldout_reporting as _impl
 
@@ -54,6 +55,7 @@ def generate_kg_heldout_reporting(
         results_csv_path=results_csv_path,
         output_dir=output_dir,
         selected_settings_path=selected_settings_path,
+        query_level_csv_path=query_level_csv_path,
     )
 
 
@@ -241,6 +243,14 @@ def _build_report_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
         help=(
             "Path to heldout_selected_settings.json. If omitted, the latest "
             "results/comparisons/**/heldout_selected_settings.json is used when available."
+        ),
+    )
+    parser.add_argument(
+        "--query-level-csv",
+        default=None,
+        help=(
+            "Path to held-out query-level CSV. If omitted, a paired heldout_query_result_* file "
+            "is auto-detected from the held-out results CSV."
         ),
     )
     parser.add_argument(
@@ -456,6 +466,17 @@ def _resolve_new_heldout_result_file(
     return new_files[-1]
 
 
+def _infer_query_csv_from_results_csv(results_csv_path: str | Path) -> Path:
+    path = Path(results_csv_path).resolve()
+    stem = path.stem
+    if stem.startswith("heldout_result_"):
+        suffix = stem.removeprefix("heldout_result_")
+        name = f"heldout_query_result_{suffix}.csv"
+    else:
+        name = f"{stem}_query.csv"
+    return path.with_name(name)
+
+
 def _run_experiment_cli(args: argparse.Namespace) -> int:
     show_progress = _resolve_show_progress(args)
     existing_files = _collect_existing_result_files() if args.output_csv_path is None else set()
@@ -549,6 +570,7 @@ def _run_report_heldout_kg_cli(args: argparse.Namespace) -> int:
         results_csv_path=args.results_csv,
         output_dir=args.output_dir,
         selected_settings_path=args.selected_settings_json,
+        query_level_csv_path=args.query_level_csv,
     )
     print(f"Held-Out KG Report Dir: {artifacts['output_dir']}")
     return 0
@@ -576,7 +598,13 @@ def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
         raise FileNotFoundError(
             f"Expected held-out output CSV was not created: {final_output_path}"
         )
+    query_output_path = _infer_query_csv_from_results_csv(final_output_path)
+    if not query_output_path.exists():
+        raise FileNotFoundError(
+            f"Expected held-out query-level CSV was not created: {query_output_path}"
+        )
     print(f"Held-Out KG Results CSV: {final_output_path}")
+    print(f"Held-Out KG Query CSV: {query_output_path}")
     return 0
 
 
@@ -631,6 +659,7 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
 
     selected_settings_path: Path
     heldout_results_csv: Path
+    query_level_csv: Path
     development_results_csv: Path | None = None
     report_output_dir: Path | None = None
     caught_exc: Exception | None = None
@@ -666,6 +695,11 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
                 args.heldout_results_csv,
                 label="Held-out results CSV",
             )
+            query_level_csv = _infer_query_csv_from_results_csv(heldout_results_csv)
+            if not query_level_csv.exists():
+                raise FileNotFoundError(
+                    f"Held-out query-level CSV not found for provided held-out results CSV: {query_level_csv}"
+                )
             stage_status["run_heldout_kg"] = "skipped"
         else:
             logger.info(
@@ -696,6 +730,11 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
                 raise FileNotFoundError(
                     f"Expected held-out output CSV was not created: {heldout_results_csv}"
                 )
+            query_level_csv = _infer_query_csv_from_results_csv(heldout_results_csv)
+            if not query_level_csv.exists():
+                raise FileNotFoundError(
+                    f"Expected held-out query-level CSV was not created: {query_level_csv}"
+                )
             stage_status["run_heldout_kg"] = "success"
             logger.info("Completed heldout-full-run stage=%s", "run_heldout_kg")
 
@@ -710,6 +749,7 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
             results_csv_path=heldout_results_csv,
             output_dir=args.output_dir,
             selected_settings_path=selected_settings_path,
+            query_level_csv_path=query_level_csv,
         )
         report_output_dir = Path(report_artifacts["output_dir"]).resolve()
         stage_status["report_heldout_kg"] = "success"
@@ -759,6 +799,7 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
                 f"development_results_csv={development_results_csv if development_results_csv is not None else ''}",
                 f"selected_settings_json={selected_settings_path.resolve() if 'selected_settings_path' in locals() else ''}",
                 f"heldout_results_csv={heldout_results_csv.resolve() if 'heldout_results_csv' in locals() else ''}",
+                f"query_level_csv={query_level_csv.resolve() if 'query_level_csv' in locals() else ''}",
                 f"report_output_dir={report_output_dir if report_output_dir is not None else ''}",
                 f"stage_select_heldout_settings={stage_status['select_heldout_settings']}",
                 f"stage_run_heldout_kg={stage_status['run_heldout_kg']}",
@@ -774,6 +815,7 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
 
     print(f"Selected Settings JSON: {selected_settings_path}")
     print(f"Held-Out KG Results CSV: {heldout_results_csv}")
+    print(f"Held-Out KG Query CSV: {query_level_csv}")
     print(f"Held-Out KG Report Dir: {report_output_dir}")
     print(f"Held-Out Full Run Manifest: {manifest_path}")
     return 0

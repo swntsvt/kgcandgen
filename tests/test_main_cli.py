@@ -469,6 +469,7 @@ heldout:
                 results_csv_path=str(results_csv),
                 output_dir=str(output_dir),
                 selected_settings_path=str(selected_json),
+                query_level_csv_path=None,
             )
             self.assertIn(f"Held-Out KG Report Dir: {output_dir}", stdout.getvalue())
 
@@ -486,6 +487,7 @@ heldout:
             results_csv_path=None,
             output_dir="results/comparisons",
             selected_settings_path=None,
+            query_level_csv_path=None,
         )
         self.assertIn("Held-Out KG Report Dir:", stdout.getvalue())
 
@@ -511,6 +513,7 @@ heldout:
 
             with patch("src.main.run_heldout_kg_experiments", return_value=[]) as heldout_mock:
                 output_csv.write_text("track,version\n", encoding="utf-8")
+                (tmp / "heldout_query.csv").write_text("track,version\n", encoding="utf-8")
                 with contextlib.redirect_stdout(stdout):
                     exit_code = main(
                         [
@@ -532,6 +535,7 @@ heldout:
                 show_progress=None,
             )
             self.assertIn(f"Held-Out KG Results CSV: {output_csv}", stdout.getvalue())
+            self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
 
     def test_run_heldout_kg_default_selected_settings_and_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -544,6 +548,8 @@ heldout:
                     expected_output = tmp / "results" / "heldout_result_20260101_000000_deadbeef.csv"
                     expected_output.parent.mkdir(parents=True, exist_ok=True)
                     expected_output.write_text("track,version\n", encoding="utf-8")
+                    expected_query = expected_output.with_name("heldout_query_result_20260101_000000_deadbeef.csv")
+                    expected_query.write_text("track,version\n", encoding="utf-8")
                     with patch(
                         "src.main._resolve_new_heldout_result_file",
                         return_value=expected_output,
@@ -561,6 +567,7 @@ heldout:
             show_progress=None,
         )
         self.assertIn("Held-Out KG Results CSV:", stdout.getvalue())
+        self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
 
     def test_run_heldout_kg_failure_path(self) -> None:
         stderr = io.StringIO()
@@ -585,6 +592,10 @@ heldout:
             heldout_csv = tmp / "results" / "heldout_result_fixture.csv"
             heldout_csv.parent.mkdir(parents=True, exist_ok=True)
             heldout_csv.write_text("track,version\n", encoding="utf-8")
+            (tmp / "results" / "heldout_query_result_fixture.csv").write_text(
+                "track,version\n",
+                encoding="utf-8",
+            )
             report_output_dir = tmp / "comparisons" / "heldout_result_fixture"
             report_output_dir.mkdir(parents=True, exist_ok=True)
             stdout = io.StringIO()
@@ -636,6 +647,7 @@ heldout:
                 results_csv_path=heldout_csv.resolve(),
                 output_dir=str(tmp / "comparisons"),
                 selected_settings_path=selected_settings.resolve(),
+                query_level_csv_path=heldout_csv.resolve().with_name("heldout_query_result_fixture.csv"),
             )
 
             manifest_path = report_output_dir / "heldout_full_run_manifest.txt"
@@ -669,6 +681,10 @@ heldout:
             heldout_csv = tmp / "results" / "heldout_result_fixture.csv"
             heldout_csv.parent.mkdir(parents=True, exist_ok=True)
             heldout_csv.write_text("track,version\n", encoding="utf-8")
+            (tmp / "results" / "heldout_query_result_fixture.csv").write_text(
+                "track,version\n",
+                encoding="utf-8",
+            )
             output_root = tmp / "comparisons" / "heldout_result_fixture"
             output_root.mkdir(parents=True, exist_ok=True)
 
@@ -699,6 +715,7 @@ heldout:
                 results_csv_path=heldout_csv.resolve(),
                 output_dir="results/comparisons",
                 selected_settings_path=selected_settings.resolve(),
+                query_level_csv_path=heldout_csv.resolve().with_name("heldout_query_result_fixture.csv"),
             )
             manifest_text = (output_root / "heldout_full_run_manifest.txt").read_text(encoding="utf-8")
             self.assertIn("stage_select_heldout_settings=skipped", manifest_text)
@@ -711,6 +728,8 @@ heldout:
             selected_settings.write_text('{"source_csv": "/tmp/dev.csv"}\n', encoding="utf-8")
             heldout_csv = tmp / "heldout_result_fixture.csv"
             heldout_csv.write_text("track,version\n", encoding="utf-8")
+            query_csv = tmp / "heldout_query_result_fixture.csv"
+            query_csv.write_text("track,version\n", encoding="utf-8")
             output_root = tmp / "comparisons" / "heldout_result_fixture"
             output_root.mkdir(parents=True, exist_ok=True)
 
@@ -741,6 +760,7 @@ heldout:
                 results_csv_path=heldout_csv.resolve(),
                 output_dir="results/comparisons",
                 selected_settings_path=selected_settings.resolve(),
+                query_level_csv_path=query_csv.resolve(),
             )
             manifest_text = (output_root / "heldout_full_run_manifest.txt").read_text(encoding="utf-8")
             self.assertIn("stage_run_heldout_kg=skipped", manifest_text)
