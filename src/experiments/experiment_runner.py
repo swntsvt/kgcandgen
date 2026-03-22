@@ -18,11 +18,12 @@ from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
-from src.method_registry import ordered_method_names
+from src.method_registry import development_method_names, fixed_method_hyperparameters
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
+from src.retrieval.exact_match_retriever import ExactMatchRetriever
 from src.retrieval.tfidf_retriever import TfidfRetriever
 
 RDF_TYPE = NamedNode("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
@@ -196,11 +197,19 @@ def _build_bm25_model_run(params: Bm25GridEntry) -> ModelRunSpec:
     )
 
 
+def _build_exact_match_model_run() -> ModelRunSpec:
+    return ModelRunSpec(
+        model_name="exact_match",
+        hyperparameters=fixed_method_hyperparameters("exact_match"),
+        retriever=ExactMatchRetriever(),
+    )
+
+
 def _build_model_runs(
     tfidf_grid: list[TfidfGridEntry], bm25_grid: list[Bm25GridEntry]
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
-    for method_name in ordered_method_names(("tfidf", "bm25")):
+    for method_name in development_method_names():
         if method_name == "tfidf":
             for params in tfidf_grid:
                 model_runs.append(_build_tfidf_model_run(params))
@@ -208,6 +217,9 @@ def _build_model_runs(
         if method_name == "bm25":
             for params in bm25_grid:
                 model_runs.append(_build_bm25_model_run(params))
+            continue
+        if method_name == "exact_match":
+            model_runs.append(_build_exact_match_model_run())
             continue
         raise ValueError(f"Unsupported registered development method: {method_name}")
     return model_runs
@@ -328,6 +340,7 @@ def run_experiments(
             target_labels = _build_labels(target_store, target_entities)
             eval_sources = sorted(gold_filtered.keys())
             source_labels = _build_labels(source_store, eval_sources)
+            source_label_map = dict(zip(eval_sources, source_labels, strict=True))
 
             target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
             source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
@@ -369,6 +382,9 @@ def run_experiments(
                     elif run.model_name == "bm25":
                         bm25_retriever = cast(Bm25Retriever, run.retriever)
                         bm25_retriever.fit_tokenized(target_entities, target_tokens)
+                    elif run.model_name == "exact_match":
+                        exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
+                        exact_match_retriever.fit(target_entities, target_labels)
                     else:
                         raise ValueError(f"Unsupported model type: {run.model_name}")
 
@@ -385,10 +401,15 @@ def run_experiments(
                             predictions[source_id] = tfidf_retriever.retrieve_preprocessed(
                                 source_label_preprocessed_map[source_id], k=k_max
                             )
-                        else:
+                        elif run.model_name == "bm25":
                             bm25_retriever = cast(Bm25Retriever, run.retriever)
                             predictions[source_id] = bm25_retriever.retrieve_tokenized(
                                 source_token_map[source_id], k=k_max
+                            )
+                        else:
+                            exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
+                            predictions[source_id] = exact_match_retriever.retrieve(
+                                source_label_map[source_id], k=k_max
                             )
 
                     raw_recalls, mrr = compute_recall_at_ks_and_mrr(

@@ -238,7 +238,7 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                 show_progress=False,
             )
 
-            self.assertEqual(len(results), 6)
+            self.assertEqual(len(results), 9)
             self.assertTrue(output_csv.exists())
             with output_csv.open("r", encoding="utf-8", newline="") as csv_file:
                 reader = csv.DictReader(csv_file)
@@ -263,11 +263,11 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                 )
                 rows = list(reader)
 
-        self.assertEqual(len(rows), 6)
+        self.assertEqual(len(rows), 9)
         entity_types = {row["entity_type"] for row in rows}
         methods = {row["method"] for row in rows}
         self.assertEqual(entity_types, {"class", "predicate", "instance"})
-        self.assertEqual(methods, {"tfidf", "bm25"})
+        self.assertEqual(methods, {"tfidf", "bm25", "exact_match"})
 
     def test_runner_uses_frozen_settings_not_grid_search(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -282,7 +282,7 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                 show_progress=False,
             )
 
-        self.assertEqual(len(results), 6)
+        self.assertEqual(len(results), 9)
         for row in results:
             if row["model"] == "tfidf":
                 self.assertEqual(
@@ -294,8 +294,10 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "sublinear_tf": False,
                     },
                 )
-            else:
+            elif row["model"] == "bm25":
                 self.assertEqual(row["hyperparameters"], {"k1": 1.8, "b": 0.75})
+            else:
+                self.assertEqual(row["hyperparameters"], {"normalization": "light_v1"})
 
     def test_candidate_reduction_ratio_handles_target_pool_smaller_than_kmax(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -326,6 +328,25 @@ class HeldoutKgRunnerTests(unittest.TestCase):
         self.assertEqual(class_row["target_pool_size"], 3)
         self.assertEqual(class_row["retained_candidate_size"], 2)
         self.assertAlmostEqual(class_row["candidate_reduction_ratio"], 1.0 - (2.0 / 3.0))
+
+    def test_exact_match_heldout_rows_use_fixed_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            selected = tmp / "heldout_selected_settings.json"
+            self._write_selected_settings(selected)
+
+            results = run_heldout_kg_experiments(
+                config_path=config,
+                selected_settings_path=selected,
+                show_progress=False,
+            )
+
+        exact_rows = [row for row in results if row["model"] == "exact_match"]
+        self.assertEqual(len(exact_rows), 3)
+        for row in exact_rows:
+            self.assertEqual(row["hyperparameters"], {"normalization": "light_v1"})
+            self.assertEqual(row["mrr"], 1.0)
 
     def test_missing_selected_method_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -436,4 +457,4 @@ class HeldoutKgRunnerTests(unittest.TestCase):
             finally:
                 os.chdir(old_cwd)
 
-        self.assertEqual(len(results), 6)
+        self.assertEqual(len(results), 9)

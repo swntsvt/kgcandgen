@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+from src.preprocessing.exact_match_normalizer import (
+    EXACT_MATCH_NORMALIZATION_VERSION,
+)
+
 
 @dataclass(frozen=True)
 class MethodDescriptor:
@@ -16,6 +20,7 @@ class MethodDescriptor:
     supports_development: bool = True
     supports_heldout: bool = True
     selected_settings_required: bool = False
+    fixed_hyperparameters: dict[str, object] | None = None
 
 
 PRIMARY_COMPARISON_METHODS: tuple[str, str] = ("tfidf", "bm25")
@@ -33,6 +38,13 @@ REGISTERED_METHODS: tuple[MethodDescriptor, ...] = (
         fixed=False,
         selected_settings_required=True,
     ),
+    MethodDescriptor(
+        name="exact_match",
+        tunable=False,
+        fixed=True,
+        selected_settings_required=False,
+        fixed_hyperparameters={"normalization": EXACT_MATCH_NORMALIZATION_VERSION},
+    ),
 )
 
 REGISTERED_METHODS_BY_NAME = {descriptor.name: descriptor for descriptor in REGISTERED_METHODS}
@@ -46,12 +58,40 @@ def tunable_method_names() -> list[str]:
     return [descriptor.name for descriptor in REGISTERED_METHODS if descriptor.tunable]
 
 
+def development_method_names() -> list[str]:
+    return [descriptor.name for descriptor in REGISTERED_METHODS if descriptor.supports_development]
+
+
+def heldout_method_names() -> list[str]:
+    return [descriptor.name for descriptor in REGISTERED_METHODS if descriptor.supports_heldout]
+
+
 def heldout_selected_method_names() -> list[str]:
     return [
         descriptor.name
         for descriptor in REGISTERED_METHODS
         if descriptor.supports_heldout and descriptor.selected_settings_required
     ]
+
+
+def fixed_method_names(*, development: bool = False, heldout: bool = False) -> list[str]:
+    names: list[str] = []
+    for descriptor in REGISTERED_METHODS:
+        if not descriptor.fixed:
+            continue
+        if development and not descriptor.supports_development:
+            continue
+        if heldout and not descriptor.supports_heldout:
+            continue
+        names.append(descriptor.name)
+    return names
+
+
+def fixed_method_hyperparameters(method_name: str) -> dict[str, object]:
+    descriptor = REGISTERED_METHODS_BY_NAME.get(str(method_name))
+    if descriptor is None or descriptor.fixed_hyperparameters is None:
+        raise KeyError(f"No fixed hyperparameters registered for method '{method_name}'.")
+    return dict(descriptor.fixed_hyperparameters)
 
 
 def supports_primary_comparison(method_names: Iterable[str]) -> bool:

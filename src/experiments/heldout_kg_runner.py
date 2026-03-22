@@ -18,7 +18,12 @@ from tqdm import tqdm
 from src.config_loader import load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
 from src.experiments.experiment_runner import _load_store_with_fallback
-from src.method_registry import heldout_selected_method_names, ordered_method_names
+from src.method_registry import (
+    fixed_method_hyperparameters,
+    fixed_method_names,
+    heldout_selected_method_names,
+    ordered_method_names,
+)
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.entity_partitioning import (
@@ -30,6 +35,7 @@ from src.rdf_utils.entity_partitioning import (
 )
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
+from src.retrieval.exact_match_retriever import ExactMatchRetriever
 from src.retrieval.tfidf_retriever import TfidfRetriever
 
 logger = logging.getLogger(__name__)
@@ -175,14 +181,36 @@ def _build_heldout_method_runs(
     frozen_settings: dict[str, dict[str, object]],
 ) -> list[HeldoutMethodRunSpec]:
     method_runs: list[HeldoutMethodRunSpec] = []
-    for method_name in ordered_method_names(frozen_settings.keys()):
+    runtime_methods = list(frozen_settings.keys()) + fixed_method_names(heldout=True)
+    for method_name in ordered_method_names(runtime_methods):
+        if method_name in frozen_settings:
+            hyperparameters = frozen_settings[method_name]
+        else:
+            hyperparameters = fixed_method_hyperparameters(method_name)
         method_runs.append(
             HeldoutMethodRunSpec(
                 method_name=method_name,
-                hyperparameters=frozen_settings[method_name],
+                hyperparameters=hyperparameters,
             )
         )
     return method_runs
+
+
+def _coerce_tfidf_ngram_range(value: object) -> tuple[int, int]:
+    if not isinstance(value, list) or len(value) != 2:
+        raise HeldoutKgRunnerValidationError(
+            "Selected settings for method 'tfidf' must include a two-item ngram_range list."
+        )
+    first, second = value
+    if not isinstance(first, int) or isinstance(first, bool):
+        raise HeldoutKgRunnerValidationError(
+            "Selected settings for method 'tfidf' must include an integer ngram_range[0]."
+        )
+    if not isinstance(second, int) or isinstance(second, bool):
+        raise HeldoutKgRunnerValidationError(
+            "Selected settings for method 'tfidf' must include an integer ngram_range[1]."
+        )
+    return (first, second)
 
 
 def _predict_for_method(
@@ -190,8 +218,10 @@ def _predict_for_method(
     method_name: str,
     hyperparameters: dict[str, object],
     target_entities: list[str],
+    target_labels: list[str],
     target_labels_preprocessed: list[str],
     target_tokens: list[list[str]],
+    source_label_map: dict[str, str],
     source_label_preprocessed_map: dict[str, str],
     source_token_map: dict[str, list[str]],
     eval_sources: list[str],
@@ -199,7 +229,7 @@ def _predict_for_method(
 ) -> dict[str, list[tuple[str, float]]]:
     if method_name == "tfidf":
         retriever = TfidfRetriever(
-            ngram_range=tuple(cast(list[int], hyperparameters["ngram_range"])),
+            ngram_range=_coerce_tfidf_ngram_range(hyperparameters["ngram_range"]),
             min_df=cast(int | float, hyperparameters["min_df"]),
             max_df=cast(int | float, hyperparameters["max_df"]),
             sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
@@ -222,6 +252,17 @@ def _predict_for_method(
         return {
             source_id: retriever.retrieve_tokenized(
                 source_token_map[source_id],
+                k=k_max,
+            )
+            for source_id in eval_sources
+        }
+
+    if method_name == "exact_match":
+        retriever = ExactMatchRetriever()
+        retriever.fit(target_entities, target_labels)
+        return {
+            source_id: retriever.retrieve(
+                source_label_map[source_id],
                 k=k_max,
             )
             for source_id in eval_sources
@@ -399,6 +440,7 @@ def run_heldout_kg_experiments(
             eval_sources = sorted(gold.keys())
             target_labels = _build_labels(target_store, target_entities)
             source_labels = _build_labels(source_store, eval_sources)
+            source_label_map = dict(zip(eval_sources, source_labels, strict=True))
             target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
             source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
             source_label_preprocessed_map = dict(
@@ -436,8 +478,10 @@ def run_heldout_kg_experiments(
                     method_name=method_name,
                     hyperparameters=hyperparameters,
                     target_entities=target_entities,
+                    target_labels=target_labels,
                     target_labels_preprocessed=target_labels_preprocessed,
                     target_tokens=target_tokens,
+                    source_label_map=source_label_map,
                     source_label_preprocessed_map=source_label_preprocessed_map,
                     source_token_map=source_token_map,
                     eval_sources=eval_sources,
