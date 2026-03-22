@@ -17,6 +17,15 @@ from src.analysis.kg_heldout_reporting import (
 
 
 class KgHeldoutReportingTests(unittest.TestCase):
+    def _paired_query_csv_path(self, results_csv_path: Path) -> Path:
+        stem = results_csv_path.stem
+        if stem.startswith("heldout_result_"):
+            suffix = stem.removeprefix("heldout_result_")
+            name = f"heldout_query_result_{suffix}.csv"
+        else:
+            name = f"{stem}_query.csv"
+        return results_csv_path.with_name(name)
+
     def _write_results_csv(self, path: Path, *, include_extra_method: bool = False) -> None:
         rows = [
             {
@@ -252,6 +261,63 @@ class KgHeldoutReportingTests(unittest.TestCase):
             writer.writeheader()
             writer.writerows(rows)
 
+        query_rows: list[dict[str, object]] = []
+        rank_by_type = {"class": 1, "predicate": 25, "instance": 0}
+        for row in rows:
+            rank = rank_by_type[str(row["entity_type"])]
+            if rank == 0:
+                band = "missed"
+                retrieved = False
+            elif rank <= 10:
+                band = "strong"
+                retrieved = True
+            elif rank <= 50:
+                band = "weak"
+                retrieved = True
+            else:
+                band = "missed"
+                retrieved = False
+            query_rows.append(
+                {
+                    "track": row["track"],
+                    "version": row["version"],
+                    "dataset": row["dataset"],
+                    "entity_type": row["entity_type"],
+                    "method": row["method"],
+                    "hyperparameters": row["hyperparameters"],
+                    "source_entity": f"urn:source:{row['dataset']}:{row['entity_type']}:{row['method']}",
+                    "source_label": f"source-{row['dataset']}-{row['entity_type']}",
+                    "gold_target": f"urn:target:{row['dataset']}:{row['entity_type']}",
+                    "gold_target_label": f"target-{row['dataset']}-{row['entity_type']}",
+                    "gold_rank": rank,
+                    "retrieved_in_top_kmax": retrieved,
+                    "retrieval_band": band,
+                }
+            )
+
+        query_path = self._paired_query_csv_path(path)
+        with query_path.open("w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.DictWriter(
+                csv_file,
+                fieldnames=[
+                    "track",
+                    "version",
+                    "dataset",
+                    "entity_type",
+                    "method",
+                    "hyperparameters",
+                    "source_entity",
+                    "source_label",
+                    "gold_target",
+                    "gold_target_label",
+                    "gold_rank",
+                    "retrieved_in_top_kmax",
+                    "retrieval_band",
+                ],
+            )
+            writer.writeheader()
+            writer.writerows(query_rows)
+
     def _write_selected_settings(self, path: Path) -> None:
         payload = {
             "heldout_datasets": ["d1", "d2"],
@@ -294,6 +360,7 @@ class KgHeldoutReportingTests(unittest.TestCase):
 
             expected_keys = {
                 "source_csv",
+                "query_level_csv",
                 "output_dir",
                 "kg_heldout_by_type_summary",
                 "kg_heldout_macro_summary",
@@ -301,13 +368,16 @@ class KgHeldoutReportingTests(unittest.TestCase):
                 "kg_heldout_reduction_effectiveness",
                 "kg_heldout_pairwise_by_type_inference",
                 "kg_heldout_pairwise_overall_inference",
+                "kg_heldout_error_cases",
+                "kg_heldout_error_by_type_summary",
+                "kg_heldout_error_interpretation",
                 "kg_heldout_interpretation_scaffold",
                 "kg_heldout_transfer_summary",
                 "manifest",
             }
             self.assertEqual(set(artifacts.keys()), expected_keys)
 
-            stable_keys = expected_keys - {"source_csv", "output_dir", "manifest"}
+            stable_keys = expected_keys - {"source_csv", "query_level_csv", "output_dir", "manifest"}
             for key in stable_keys:
                 self.assertEqual(
                     Path(artifacts[key]).read_text(encoding="utf-8"),
@@ -435,6 +505,133 @@ class KgHeldoutReportingTests(unittest.TestCase):
                 float(tfidf_class["candidate_reduction_ratio_delta_vs_other_method"]), 0.0
             )
 
+    def test_error_artifacts_include_type_method_band_grouping(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv, include_extra_method=True)
+
+            artifacts = generate_kg_heldout_reporting(
+                results_csv_path=results_csv,
+                output_dir=tmp / "comparisons",
+            )
+
+            with Path(artifacts["kg_heldout_error_cases"]).open(encoding="utf-8") as csv_file:
+                error_rows = list(csv.DictReader(csv_file))
+            self.assertTrue(error_rows)
+            self.assertEqual(
+                {"strong", "weak", "missed"},
+                {row["retrieval_band"] for row in error_rows},
+            )
+
+            with Path(artifacts["kg_heldout_error_by_type_summary"]).open(
+                encoding="utf-8"
+            ) as csv_file:
+                summary_rows = list(csv.DictReader(csv_file))
+            self.assertTrue(summary_rows)
+            self.assertIn(
+                ("class", "tfidf", "strong"),
+                {
+                    (row["entity_type"], row["method"], row["retrieval_band"])
+                    for row in summary_rows
+                },
+            )
+            class_tfidf_strong = next(
+                row
+                for row in summary_rows
+                if row["entity_type"] == "class"
+                and row["method"] == "tfidf"
+                and row["retrieval_band"] == "strong"
+            )
+            self.assertAlmostEqual(float(class_tfidf_strong["query_rate"]), 1.0)
+
+            interpretation = Path(artifacts["kg_heldout_error_interpretation"]).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("KG Held-Out Error Analysis", interpretation)
+            self.assertIn("dominant band", interpretation)
+
+    def test_explicit_query_level_csv_is_used(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv)
+            explicit_query_csv = tmp / "custom_query.csv"
+            explicit_query_csv.write_text(
+                self._paired_query_csv_path(results_csv).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+            artifacts = generate_kg_heldout_reporting(
+                results_csv_path=results_csv,
+                output_dir=tmp / "comparisons",
+                query_level_csv_path=explicit_query_csv,
+            )
+
+            self.assertEqual(Path(artifacts["query_level_csv"]), explicit_query_csv.resolve())
+
+    def test_query_validation_rejects_inconsistent_top_k_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv)
+            query_csv = self._paired_query_csv_path(results_csv)
+            with query_csv.open(encoding="utf-8") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            rows[0]["gold_rank"] = "1"
+            rows[0]["retrieved_in_top_kmax"] = "False"
+            with query_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            with self.assertRaises(KgHeldoutReportingValidationError):
+                generate_kg_heldout_reporting(
+                    results_csv_path=results_csv,
+                    output_dir=tmp / "comparisons",
+                )
+
+    def test_query_validation_rejects_inconsistent_band(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv)
+            query_csv = self._paired_query_csv_path(results_csv)
+            with query_csv.open(encoding="utf-8") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            rows[0]["gold_rank"] = "1"
+            rows[0]["retrieval_band"] = "weak"
+            with query_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            with self.assertRaises(KgHeldoutReportingValidationError):
+                generate_kg_heldout_reporting(
+                    results_csv_path=results_csv,
+                    output_dir=tmp / "comparisons",
+                )
+
+    def test_query_validation_rejects_duplicate_query_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv)
+            query_csv = self._paired_query_csv_path(results_csv)
+            with query_csv.open(encoding="utf-8") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            duplicated_rows = rows + [rows[0]]
+            with query_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(duplicated_rows)
+
+            with self.assertRaises(KgHeldoutReportingValidationError):
+                generate_kg_heldout_reporting(
+                    results_csv_path=results_csv,
+                    output_dir=tmp / "comparisons",
+                )
+
     def test_pairwise_inference_artifacts_include_expected_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -525,6 +722,14 @@ class KgHeldoutReportingTests(unittest.TestCase):
                 writer = csv.DictWriter(csv_file, fieldnames=list(tfidf_only[0].keys()))
                 writer.writeheader()
                 writer.writerows(tfidf_only)
+            query_csv = self._paired_query_csv_path(results_csv)
+            with query_csv.open(encoding="utf-8") as csv_file:
+                query_rows = list(csv.DictReader(csv_file))
+            tfidf_query = [row for row in query_rows if row["method"] == "tfidf"]
+            with query_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(tfidf_query[0].keys()))
+                writer.writeheader()
+                writer.writerows(tfidf_query)
 
             artifacts = generate_kg_heldout_reporting(
                 results_csv_path=results_csv,

@@ -56,6 +56,22 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "runtime_seconds",
 )
 
+QUERY_CSV_COLUMNS: tuple[str, ...] = (
+    "track",
+    "version",
+    "dataset",
+    "entity_type",
+    "method",
+    "hyperparameters",
+    "source_entity",
+    "source_label",
+    "gold_target",
+    "gold_target_label",
+    "gold_rank",
+    "retrieved_in_top_kmax",
+    "retrieval_band",
+)
+
 
 class HeldoutKgRunnerValidationError(ValueError):
     """Raised when held-out KG execution inputs are invalid."""
@@ -75,6 +91,22 @@ class HeldoutKgResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+
+
+class HeldoutKgQueryRecord(TypedDict):
+    track: str
+    version: str
+    dataset_name: str
+    entity_type: str
+    model: str
+    hyperparameters: dict[str, object]
+    source_entity: str
+    source_label: str
+    gold_target: str
+    gold_target_label: str
+    gold_rank: int
+    retrieved_in_top_kmax: bool
+    retrieval_band: str
 
 
 @dataclass(frozen=True)
@@ -102,6 +134,16 @@ def _default_output_csv_path() -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     git_sha = _get_git_short_sha()
     return Path("results") / f"heldout_result_{timestamp}_{git_sha}.csv"
+
+
+def _query_output_csv_path(results_output_csv_path: Path) -> Path:
+    stem = results_output_csv_path.stem
+    if stem.startswith("heldout_result_"):
+        suffix = stem.removeprefix("heldout_result_")
+        query_name = f"heldout_query_result_{suffix}.csv"
+    else:
+        query_name = f"{stem}_query.csv"
+    return results_output_csv_path.with_name(query_name)
 
 
 def _resolve_selected_settings_json(
@@ -337,6 +379,67 @@ def _persist_results_to_csv(
             writer.writerow(row)
 
 
+def _persist_query_results_to_csv(
+    query_results: list[HeldoutKgQueryRecord],
+    output_csv_path: str | Path,
+) -> None:
+    ordered_query_results = sorted(
+        query_results,
+        key=lambda record: (
+            record["track"],
+            record["dataset_name"],
+            record["entity_type"],
+            record["model"],
+            record["source_entity"],
+        ),
+    )
+    output_path = Path(output_csv_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(QUERY_CSV_COLUMNS))
+        writer.writeheader()
+        for record in ordered_query_results:
+            row: dict[str, object] = {
+                "track": record["track"],
+                "version": record["version"],
+                "dataset": record["dataset_name"],
+                "entity_type": record["entity_type"],
+                "method": record["model"],
+                "hyperparameters": json.dumps(
+                    record["hyperparameters"], sort_keys=True, separators=(",", ":")
+                ),
+                "source_entity": record["source_entity"],
+                "source_label": record["source_label"],
+                "gold_target": record["gold_target"],
+                "gold_target_label": record["gold_target_label"],
+                "gold_rank": record["gold_rank"],
+                "retrieved_in_top_kmax": record["retrieved_in_top_kmax"],
+                "retrieval_band": record["retrieval_band"],
+            }
+            writer.writerow(row)
+
+
+def _gold_rank(
+    ranked_candidates: list[tuple[str, float]],
+    gold_target: str,
+) -> int:
+    for rank, (target_id, _score) in enumerate(ranked_candidates, start=1):
+        if target_id == gold_target:
+            return rank
+    return 0
+
+
+def _retrieval_band(gold_rank: int) -> str:
+    if gold_rank <= 0:
+        return "missed"
+    if gold_rank <= 10:
+        return "strong"
+    if gold_rank <= 50:
+        return "weak"
+    return "missed"
+
+
 def _entity_values(partitions: TypedEntityPartitions, entity_type: EntityType) -> tuple[str, ...]:
     if entity_type is EntityType.CLASS:
         return partitions.classes
@@ -405,7 +508,9 @@ def run_heldout_kg_experiments(
         progress_enabled,
     )
 
+    query_output_csv_path = _query_output_csv_path(resolved_output_csv_path)
     results: list[HeldoutKgResultRecord] = []
+    query_results: list[HeldoutKgQueryRecord] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -453,6 +558,7 @@ def run_heldout_kg_experiments(
             target_labels = _build_labels(target_store, target_entities)
             source_labels = _build_labels(source_store, eval_sources)
             source_label_map = dict(zip(eval_sources, source_labels, strict=True))
+            target_label_map = dict(zip(target_entities, target_labels, strict=True))
             target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
             source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
             source_label_preprocessed_map = dict(
@@ -529,6 +635,28 @@ def run_heldout_kg_experiments(
                     mrr,
                     results[-1]["runtime_seconds"],
                 )
+
+                for source_id in eval_sources:
+                    gold_target = gold[source_id]
+                    ranked = predictions.get(source_id, [])
+                    gold_rank = _gold_rank(ranked, gold_target)
+                    query_results.append(
+                        HeldoutKgQueryRecord(
+                            track=dataset.track,
+                            version=dataset.version,
+                            dataset_name=dataset.name,
+                            entity_type=entity_type.value,
+                            model=method_name,
+                            hyperparameters=hyperparameters,
+                            source_entity=source_id,
+                            source_label=source_label_map[source_id],
+                            gold_target=gold_target,
+                            gold_target_label=target_label_map.get(gold_target, ""),
+                            gold_rank=gold_rank,
+                            retrieved_in_top_kmax=(gold_rank > 0 and gold_rank <= k_max),
+                            retrieval_band=_retrieval_band(gold_rank),
+                        )
+                    )
         logger.info("Finished held-out dataset '%s'", dataset_name)
 
     _persist_results_to_csv(
@@ -536,10 +664,19 @@ def run_heldout_kg_experiments(
         output_csv_path=resolved_output_csv_path,
         evaluation_ks=evaluation_ks,
     )
+    _persist_query_results_to_csv(
+        query_results,
+        output_csv_path=query_output_csv_path,
+    )
     logger.info(
         "Persisted %d held-out KG result record(s) to %s",
         len(results),
         resolved_output_csv_path,
+    )
+    logger.info(
+        "Persisted %d held-out KG query-level record(s) to %s",
+        len(query_results),
+        query_output_csv_path,
     )
     logger.info("Held-out KG run finished with %d result record(s)", len(results))
     return results

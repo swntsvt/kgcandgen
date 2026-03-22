@@ -33,6 +33,22 @@ REQUIRED_COLUMNS = {
     "runtime_seconds",
 }
 REQUIRED_ENTITY_TYPES = {"class", "predicate", "instance"}
+RETRIEVAL_BANDS = ("strong", "weak", "missed")
+REQUIRED_QUERY_COLUMNS = {
+    "track",
+    "version",
+    "dataset",
+    "entity_type",
+    "method",
+    "hyperparameters",
+    "source_entity",
+    "source_label",
+    "gold_target",
+    "gold_target_label",
+    "gold_rank",
+    "retrieved_in_top_kmax",
+    "retrieval_band",
+}
 
 
 class KgHeldoutReportingValidationError(ValueError):
@@ -53,6 +69,22 @@ def _coerce_float(value: object) -> float:
         if isinstance(scalar_value, (int, float, str)):
             return float(scalar_value)
     raise TypeError(f"Unsupported float value: {value!r}")
+
+
+def _coerce_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        numeric = float(value)
+        if numeric in (0.0, 1.0):
+            return bool(int(numeric))
+        raise ValueError(f"Unsupported boolean numeric value: {value!r}")
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    raise ValueError(f"Unsupported boolean value: {value!r}")
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
@@ -121,6 +153,37 @@ def _resolve_selected_settings_json(
     return None, False
 
 
+def _infer_query_level_csv_path(results_csv: Path) -> Path:
+    stem = results_csv.stem
+    if stem.startswith("heldout_result_"):
+        suffix = stem.removeprefix("heldout_result_")
+        name = f"heldout_query_result_{suffix}.csv"
+    else:
+        name = f"{stem}_query.csv"
+    return results_csv.with_name(name)
+
+
+def _resolve_query_level_csv(
+    *,
+    results_csv: Path,
+    query_level_csv_path: str | Path | None,
+) -> Path:
+    if query_level_csv_path is not None:
+        path = Path(query_level_csv_path).resolve()
+        if not path.exists():
+            raise FileNotFoundError(f"Held-out query-level CSV not found: {path}")
+        return path
+
+    inferred = _infer_query_level_csv_path(results_csv).resolve()
+    if inferred.exists():
+        return inferred
+
+    raise FileNotFoundError(
+        "Could not auto-detect held-out query-level CSV for reporting. "
+        f"Expected paired file: {inferred}. Pass --query-level-csv explicitly."
+    )
+
+
 def _find_recall_columns(frame: pd.DataFrame) -> list[str]:
     recall_columns = [column for column in frame.columns if column.startswith("recall_at_")]
     if not recall_columns:
@@ -128,6 +191,116 @@ def _find_recall_columns(frame: pd.DataFrame) -> list[str]:
             "Held-out KG reporting requires at least one recall_at_<k> column."
         )
     return sorted(recall_columns, key=lambda column: int(column.removeprefix("recall_at_")))
+
+
+def _validate_query_frame(
+    frame: pd.DataFrame,
+    *,
+    methods: list[str],
+    k_max: int,
+) -> pd.DataFrame:
+    missing_columns = sorted(REQUIRED_QUERY_COLUMNS - set(frame.columns))
+    if missing_columns:
+        raise KgHeldoutReportingValidationError(
+            "Missing required held-out query-level column(s): " + ", ".join(missing_columns)
+        )
+
+    validated = frame.copy()
+    for column in (
+        "track",
+        "version",
+        "dataset",
+        "entity_type",
+        "method",
+        "hyperparameters",
+        "source_entity",
+        "source_label",
+        "gold_target",
+        "gold_target_label",
+        "retrieval_band",
+    ):
+        validated[column] = validated[column].astype(str)
+
+    validated["gold_rank"] = validated["gold_rank"].astype(int)
+    try:
+        validated["retrieved_in_top_kmax"] = validated["retrieved_in_top_kmax"].map(_coerce_bool)
+    except ValueError as exc:
+        raise KgHeldoutReportingValidationError(
+            "Held-out query-level CSV contains invalid retrieved_in_top_kmax values."
+        ) from exc
+
+    entity_types = set(validated["entity_type"].unique())
+    if entity_types != REQUIRED_ENTITY_TYPES:
+        raise KgHeldoutReportingValidationError(
+            "Held-out query-level reporting requires exactly these entity types: "
+            + ", ".join(sorted(REQUIRED_ENTITY_TYPES))
+        )
+
+    method_set = set(validated["method"].unique())
+    expected_methods = set(methods)
+    if method_set != expected_methods:
+        raise KgHeldoutReportingValidationError(
+            "Held-out query-level CSV method set must match held-out results CSV method set. "
+            f"Expected {sorted(expected_methods)}, found {sorted(method_set)}."
+        )
+
+    bands = set(validated["retrieval_band"].unique())
+    if not bands.issubset(set(RETRIEVAL_BANDS)):
+        raise KgHeldoutReportingValidationError(
+            "Held-out query-level CSV contains unsupported retrieval_band values."
+        )
+
+    duplicates = (
+        validated.groupby(
+            [
+                "track",
+                "version",
+                "dataset",
+                "entity_type",
+                "method",
+                "source_entity",
+                "gold_target",
+            ]
+        )
+        .size()
+        .reset_index(name="row_count")
+    )
+    duplicated_rows = duplicates[duplicates["row_count"] != 1]
+    if not duplicated_rows.empty:
+        bad = duplicated_rows.iloc[0]
+        raise KgHeldoutReportingValidationError(
+            "Held-out query-level CSV requires exactly one row per "
+            "track/version/dataset/entity_type/method/source_entity/gold_target. "
+            f"Found {int(bad['row_count'])} row(s) for dataset='{bad['dataset']}', "
+            f"entity_type='{bad['entity_type']}', method='{bad['method']}', "
+            f"source_entity='{bad['source_entity']}'."
+        )
+
+    for row in validated.to_dict(orient="records"):
+        gold_rank = int(_coerce_float(row["gold_rank"]))
+        retrieved_in_top_kmax = _coerce_bool(row["retrieved_in_top_kmax"])
+        expected_retrieved = gold_rank > 0 and gold_rank <= k_max
+        if retrieved_in_top_kmax != expected_retrieved:
+            raise KgHeldoutReportingValidationError(
+                "Held-out query-level CSV contains inconsistent retrieved_in_top_kmax values."
+            )
+        if gold_rank <= 0:
+            expected_band = "missed"
+        elif gold_rank <= 10:
+            expected_band = "strong"
+        elif gold_rank <= 50:
+            expected_band = "weak"
+        else:
+            expected_band = "missed"
+        if str(row["retrieval_band"]) != expected_band:
+            raise KgHeldoutReportingValidationError(
+                "Held-out query-level CSV contains retrieval_band values inconsistent with gold_rank."
+            )
+
+    return validated.sort_values(
+        ["track", "dataset", "entity_type", "method", "source_entity"],
+        kind="mergesort",
+    ).reset_index(drop=True)
 
 
 def _validate_results_frame(frame: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
@@ -443,6 +616,109 @@ def _build_reduction_effectiveness(
     return enriched.sort_values(
         ["track", "dataset", "entity_type", "method"], kind="mergesort"
     ).reset_index(drop=True)
+
+
+def _build_error_cases(query_frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "track",
+        "version",
+        "dataset",
+        "entity_type",
+        "method",
+        "hyperparameters",
+        "source_entity",
+        "source_label",
+        "gold_target",
+        "gold_target_label",
+        "gold_rank",
+        "retrieved_in_top_kmax",
+        "retrieval_band",
+    ]
+    return query_frame[columns].copy().sort_values(
+        ["track", "dataset", "entity_type", "method", "source_entity"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
+def _build_error_by_type_summary(
+    error_cases: pd.DataFrame,
+    methods: list[str],
+) -> pd.DataFrame:
+    grouped = (
+        error_cases.groupby(["entity_type", "method", "retrieval_band"], as_index=False)
+        .size()
+        .rename(columns={"size": "query_count"})
+    )
+    totals = (
+        error_cases.groupby(["entity_type", "method"], as_index=False)
+        .size()
+        .rename(columns={"size": "total_queries"})
+    )
+    full_index = pd.MultiIndex.from_product(
+        [sorted(REQUIRED_ENTITY_TYPES), methods, RETRIEVAL_BANDS],
+        names=["entity_type", "method", "retrieval_band"],
+    )
+    full = (
+        grouped.set_index(["entity_type", "method", "retrieval_band"])
+        .reindex(full_index, fill_value=0)
+        .reset_index()
+    )
+    merged = full.merge(
+        totals,
+        on=["entity_type", "method"],
+        how="left",
+    )
+    merged["total_queries"] = merged["total_queries"].fillna(0).astype(int)
+    merged["query_count"] = merged["query_count"].astype(int)
+    merged["query_rate"] = merged.apply(
+        lambda row: float(row["query_count"] / row["total_queries"])
+        if int(row["total_queries"]) > 0
+        else 0.0,
+        axis=1,
+    )
+    return merged.sort_values(
+        ["entity_type", "method", "retrieval_band"], kind="mergesort"
+    ).reset_index(drop=True)
+
+
+def _write_error_interpretation(
+    output_path: Path,
+    *,
+    query_level_csv: Path,
+    error_summary: pd.DataFrame,
+    methods: list[str],
+) -> None:
+    lines = [
+        "# KG Held-Out Error Analysis",
+        "",
+        f"- Query-level input CSV: `{query_level_csv}`",
+        "- Retrieval bands: `strong` (rank 1-10), `weak` (rank 11-50), `missed` (not retrieved within k_max).",
+        "",
+    ]
+    for entity_type in sorted(REQUIRED_ENTITY_TYPES):
+        lines.append(f"## {entity_type.capitalize()}")
+        lines.append("")
+        section = error_summary[error_summary["entity_type"] == entity_type].copy()
+        for method in methods:
+            method_rows = section[section["method"] == method].copy()
+            if method_rows.empty:
+                continue
+            ranked = method_rows.sort_values(
+                ["query_count", "retrieval_band"],
+                ascending=[False, True],
+                kind="mergesort",
+            )
+            dominant = ranked.iloc[0]
+            lines.append(
+                f"- `{method}` dominant band: `{dominant['retrieval_band']}` "
+                f"({int(dominant['query_count'])}/{int(dominant['total_queries'])}, {float(dominant['query_rate']):.6f})"
+            )
+            for row in method_rows.itertuples(index=False):
+                lines.append(
+                    f"  - `{row.retrieval_band}`: count `{row.query_count}` rate `{row.query_rate:.6f}`"
+                )
+        lines.append("")
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _pairwise_method_pairs(methods: list[str]) -> list[tuple[str, str]]:
@@ -911,11 +1187,19 @@ def generate_kg_heldout_reporting(
     results_csv_path: str | Path | None,
     output_dir: str | Path = "results/comparisons",
     selected_settings_path: str | Path | None = None,
+    query_level_csv_path: str | Path | None = None,
 ) -> dict[str, Path]:
     """Generate held-out KG reporting artifacts."""
     source_csv = _resolve_results_csv(results_csv_path)
     frame = pd.read_csv(source_csv)
     validated, recall_columns, methods = _validate_results_frame(frame)
+    k_max = max(int(column.removeprefix("recall_at_")) for column in recall_columns)
+    query_source_csv = _resolve_query_level_csv(
+        results_csv=source_csv,
+        query_level_csv_path=query_level_csv_path,
+    )
+    query_frame = pd.read_csv(query_source_csv)
+    validated_query = _validate_query_frame(query_frame, methods=methods, k_max=k_max)
     heldout_datasets = set(validated["dataset"].unique())
 
     by_type_summary = _build_by_type_summary(validated, recall_columns, methods)
@@ -928,6 +1212,8 @@ def generate_kg_heldout_reporting(
     pairwise_overall_inference = _build_pairwise_overall_inference(
         validated, recall_columns, methods
     )
+    error_cases = _build_error_cases(validated_query)
+    error_by_type_summary = _build_error_by_type_summary(error_cases, methods)
 
     selected_settings_json, selected_settings_explicit = _resolve_selected_settings_json(
         selected_settings_path,
@@ -954,6 +1240,9 @@ def generate_kg_heldout_reporting(
     reduction_path = output_root / "kg_heldout_reduction_effectiveness.csv"
     pairwise_by_type_path = output_root / "kg_heldout_pairwise_by_type_inference.csv"
     pairwise_overall_path = output_root / "kg_heldout_pairwise_overall_inference.csv"
+    error_cases_path = output_root / "kg_heldout_error_cases.csv"
+    error_summary_path = output_root / "kg_heldout_error_by_type_summary.csv"
+    error_interpretation_path = output_root / "kg_heldout_error_interpretation.md"
     interpretation_path = output_root / "kg_heldout_interpretation_scaffold.md"
     transfer_path = output_root / "kg_heldout_transfer_summary.csv"
     manifest_path = output_root / "manifest.txt"
@@ -964,6 +1253,8 @@ def generate_kg_heldout_reporting(
     reduction_effectiveness.to_csv(reduction_path, index=False, quoting=csv.QUOTE_MINIMAL)
     pairwise_by_type_inference.to_csv(pairwise_by_type_path, index=False)
     pairwise_overall_inference.to_csv(pairwise_overall_path, index=False)
+    error_cases.to_csv(error_cases_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    error_by_type_summary.to_csv(error_summary_path, index=False)
     if transfer_summary is not None:
         transfer_summary.to_csv(transfer_path, index=False)
 
@@ -982,9 +1273,16 @@ def generate_kg_heldout_reporting(
         transfer_note=transfer_note,
         methods=methods,
     )
+    _write_error_interpretation(
+        error_interpretation_path,
+        query_level_csv=query_source_csv,
+        error_summary=error_by_type_summary,
+        methods=methods,
+    )
 
     manifest_lines = [
         f"source_csv={source_csv}",
+        f"query_level_csv={query_source_csv}",
         f"output_dir={output_root}",
         f"selected_settings_json={selected_settings_json}" if selected_settings_json is not None else "selected_settings_json=",
     ]
@@ -992,6 +1290,7 @@ def generate_kg_heldout_reporting(
 
     artifacts: dict[str, Path] = {
         "source_csv": source_csv,
+        "query_level_csv": query_source_csv,
         "output_dir": output_root,
         "kg_heldout_by_type_summary": by_type_path,
         "kg_heldout_macro_summary": macro_path,
@@ -999,6 +1298,9 @@ def generate_kg_heldout_reporting(
         "kg_heldout_reduction_effectiveness": reduction_path,
         "kg_heldout_pairwise_by_type_inference": pairwise_by_type_path,
         "kg_heldout_pairwise_overall_inference": pairwise_overall_path,
+        "kg_heldout_error_cases": error_cases_path,
+        "kg_heldout_error_by_type_summary": error_summary_path,
+        "kg_heldout_error_interpretation": error_interpretation_path,
         "kg_heldout_interpretation_scaffold": interpretation_path,
         "manifest": manifest_path,
     }
