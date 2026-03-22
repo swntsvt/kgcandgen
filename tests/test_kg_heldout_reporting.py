@@ -5,6 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from src.analysis.heldout_inference import (
+    exact_paired_sign_flip_p_value,
+    paired_sign_flip_p_value,
+    paired_bootstrap_confidence_interval,
+)
 from src.analysis.kg_heldout_reporting import (
     KgHeldoutReportingValidationError,
     generate_kg_heldout_reporting,
@@ -209,106 +214,38 @@ class KgHeldoutReportingTests(unittest.TestCase):
         ]
 
         if include_extra_method:
-            rows.extend(
-                [
+            extra_rows: list[dict[str, object]] = []
+            for row in rows:
+                if row["method"] != "tfidf":
+                    continue
+
+                exact_row = dict(row)
+                exact_row.update(
                     {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d1",
-                        "entity_type": "class",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 10,
-                        "target_pool_size": 100,
-                        "retained_candidate_size": 50,
-                        "candidate_reduction_ratio": 0.50,
-                        "recall_at_1": 0.65,
-                        "recall_at_50": 0.91,
-                        "mrr": 0.82,
+                        "method": "exact_match",
+                        "hyperparameters": '{"normalization":"light_v1"}',
+                        "recall_at_1": max(0.0, float(row["recall_at_1"]) - 0.05),
+                        "recall_at_50": max(0.0, float(row["recall_at_50"]) - 0.03),
+                        "mrr": max(0.0, float(row["mrr"]) - 0.06),
                         "runtime_seconds": 0.08,
-                    },
+                    }
+                )
+                extra_rows.append(exact_row)
+
+                char_ngram_row = dict(row)
+                char_ngram_row.update(
                     {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d2",
-                        "entity_type": "class",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 1,
-                        "target_pool_size": 80,
-                        "retained_candidate_size": 40,
-                        "candidate_reduction_ratio": 0.50,
-                        "recall_at_1": 0.45,
-                        "recall_at_50": 0.75,
-                        "mrr": 0.62,
+                        "method": "char_ngram",
+                        "hyperparameters": '{"normalization":"light_v1","analyzer":"char_wb","ngram_range":[3,5]}',
+                        "recall_at_1": max(0.0, float(row["recall_at_1"]) - 0.02),
+                        "recall_at_50": max(0.0, float(row["recall_at_50"]) - 0.01),
+                        "mrr": max(0.0, float(row["mrr"]) - 0.03),
                         "runtime_seconds": 0.07,
-                    },
-                    {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d1",
-                        "entity_type": "predicate",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 1,
-                        "target_pool_size": 20,
-                        "retained_candidate_size": 5,
-                        "candidate_reduction_ratio": 0.75,
-                        "recall_at_1": 0.25,
-                        "recall_at_50": 0.52,
-                        "mrr": 0.45,
-                        "runtime_seconds": 0.05,
-                    },
-                    {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d2",
-                        "entity_type": "predicate",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 1,
-                        "target_pool_size": 10,
-                        "retained_candidate_size": 4,
-                        "candidate_reduction_ratio": 0.60,
-                        "recall_at_1": 0.25,
-                        "recall_at_50": 0.68,
-                        "mrr": 0.57,
-                        "runtime_seconds": 0.05,
-                    },
-                    {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d1",
-                        "entity_type": "instance",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 1,
-                        "target_pool_size": 200,
-                        "retained_candidate_size": 50,
-                        "candidate_reduction_ratio": 0.75,
-                        "recall_at_1": 0.12,
-                        "recall_at_50": 0.38,
-                        "mrr": 0.31,
-                        "runtime_seconds": 0.09,
-                    },
-                    {
-                        "track": "kg",
-                        "version": "heldout-v1",
-                        "dataset": "d2",
-                        "entity_type": "instance",
-                        "method": "chargram",
-                        "hyperparameters": '{"cfg":"chargram"}',
-                        "gold_count": 20,
-                        "target_pool_size": 150,
-                        "retained_candidate_size": 50,
-                        "candidate_reduction_ratio": 2.0 / 3.0,
-                        "recall_at_1": 0.42,
-                        "recall_at_50": 0.62,
-                        "mrr": 0.52,
-                        "runtime_seconds": 0.11,
-                    },
-                ]
-            )
+                    }
+                )
+                extra_rows.append(char_ngram_row)
+
+            rows.extend(extra_rows)
 
         with path.open("w", encoding="utf-8", newline="") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
@@ -362,6 +299,8 @@ class KgHeldoutReportingTests(unittest.TestCase):
                 "kg_heldout_macro_summary",
                 "kg_heldout_micro_summary",
                 "kg_heldout_reduction_effectiveness",
+                "kg_heldout_pairwise_by_type_inference",
+                "kg_heldout_pairwise_overall_inference",
                 "kg_heldout_interpretation_scaffold",
                 "kg_heldout_transfer_summary",
                 "manifest",
@@ -374,6 +313,9 @@ class KgHeldoutReportingTests(unittest.TestCase):
                     Path(artifacts[key]).read_text(encoding="utf-8"),
                     Path(second_artifacts[key]).read_text(encoding="utf-8"),
                 )
+
+            manifest_text = Path(artifacts["manifest"]).read_text(encoding="utf-8")
+            self.assertNotIn("generated_at=", manifest_text)
 
     def test_grouping_macro_micro_and_transfer_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -443,24 +385,27 @@ class KgHeldoutReportingTests(unittest.TestCase):
 
             with Path(artifacts["kg_heldout_by_type_summary"]).open(encoding="utf-8") as csv_file:
                 by_type_rows = list(csv.DictReader(csv_file))
-            self.assertIn("chargram", {row["method"] for row in by_type_rows})
+            self.assertIn("exact_match", {row["method"] for row in by_type_rows})
+            self.assertIn("char_ngram", {row["method"] for row in by_type_rows})
 
             with Path(artifacts["kg_heldout_macro_summary"]).open(encoding="utf-8") as csv_file:
                 macro_rows = list(csv.DictReader(csv_file))
-            self.assertIn("chargram", {row["method"] for row in macro_rows})
+            self.assertIn("exact_match", {row["method"] for row in macro_rows})
+            self.assertIn("char_ngram", {row["method"] for row in macro_rows})
             self.assertIn("delta_tfidf_minus_bm25", {row["method"] for row in macro_rows})
 
             with Path(artifacts["kg_heldout_micro_summary"]).open(encoding="utf-8") as csv_file:
                 micro_rows = list(csv.DictReader(csv_file))
-            self.assertIn("chargram", {row["method"] for row in micro_rows})
+            self.assertIn("exact_match", {row["method"] for row in micro_rows})
+            self.assertIn("char_ngram", {row["method"] for row in micro_rows})
 
             with Path(artifacts["kg_heldout_reduction_effectiveness"]).open(
                 encoding="utf-8"
             ) as csv_file:
                 reduction_rows = list(csv.DictReader(csv_file))
-            chargram_row = next(row for row in reduction_rows if row["method"] == "chargram")
-            self.assertEqual(chargram_row["other_method"], "")
-            self.assertEqual(chargram_row["mrr_delta_vs_other_method"], "")
+            char_ngram_row = next(row for row in reduction_rows if row["method"] == "char_ngram")
+            self.assertEqual(char_ngram_row["other_method"], "")
+            self.assertEqual(char_ngram_row["mrr_delta_vs_other_method"], "")
 
     def test_reduction_effectiveness_includes_per_pair_deltas(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -488,6 +433,150 @@ class KgHeldoutReportingTests(unittest.TestCase):
             self.assertAlmostEqual(float(tfidf_class["recall_at_50_delta_vs_other_method"]), 0.05)
             self.assertAlmostEqual(
                 float(tfidf_class["candidate_reduction_ratio_delta_vs_other_method"]), 0.0
+            )
+
+    def test_pairwise_inference_artifacts_include_expected_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv, include_extra_method=True)
+
+            artifacts = generate_kg_heldout_reporting(
+                results_csv_path=results_csv,
+                output_dir=tmp / "comparisons",
+            )
+
+            with Path(artifacts["kg_heldout_pairwise_by_type_inference"]).open(
+                encoding="utf-8"
+            ) as csv_file:
+                by_type_rows = list(csv.DictReader(csv_file))
+            class_tfidf_vs_bm25 = next(
+                row
+                for row in by_type_rows
+                if row["entity_type"] == "class"
+                and row["metric"] == "mrr"
+                and row["method_a"] == "tfidf"
+                and row["method_b"] == "bm25"
+            )
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["paired_delta"]), 0.10)
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["method_a_mean"]), 0.80)
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["method_b_mean"]), 0.70)
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["ci_lower"]), 0.10)
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["ci_upper"]), 0.10)
+            self.assertAlmostEqual(float(class_tfidf_vs_bm25["p_value"]), 0.50)
+
+            metrics = {row["metric"] for row in by_type_rows}
+            self.assertEqual(metrics, {"mrr", "recall_at_1", "recall_at_50"})
+
+            with Path(artifacts["kg_heldout_pairwise_overall_inference"]).open(
+                encoding="utf-8"
+            ) as csv_file:
+                overall_rows = list(csv.DictReader(csv_file))
+            self.assertIn(
+                "overall_dataset_type_rows",
+                {row["aggregation_scope"] for row in overall_rows},
+            )
+            self.assertIn(
+                "macro_entity_type_means",
+                {row["aggregation_scope"] for row in overall_rows},
+            )
+            self.assertNotIn(
+                "candidate_reduction_ratio",
+                {row["metric"] for row in overall_rows},
+            )
+
+    def test_inference_helpers_are_deterministic_and_exact(self) -> None:
+        ci_first = paired_bootstrap_confidence_interval([0.1, 0.1])
+        ci_second = paired_bootstrap_confidence_interval([0.1, 0.1])
+        self.assertEqual(ci_first, ci_second)
+        self.assertAlmostEqual(ci_first[0], 0.1)
+        self.assertAlmostEqual(ci_first[1], 0.1)
+        self.assertAlmostEqual(exact_paired_sign_flip_p_value([0.1, 0.1]), 0.5)
+        self.assertAlmostEqual(exact_paired_sign_flip_p_value([0.0, 0.0]), 1.0)
+
+    def test_sign_flip_monte_carlo_fallback_is_deterministic(self) -> None:
+        deltas = [0.5, -0.1, 0.3, -0.2, 0.4, -0.05]
+        p_first = paired_sign_flip_p_value(
+            deltas,
+            exact_max_nonzero=2,
+            monte_carlo_draws=50_000,
+            seed=1729,
+        )
+        p_second = paired_sign_flip_p_value(
+            deltas,
+            exact_max_nonzero=2,
+            monte_carlo_draws=50_000,
+            seed=1729,
+        )
+        self.assertAlmostEqual(p_first, p_second)
+        self.assertGreaterEqual(p_first, 0.0)
+        self.assertLessEqual(p_first, 1.0)
+
+    def test_single_method_reporting_keeps_pairwise_artifacts_empty_but_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            self._write_results_csv(results_csv)
+
+            with results_csv.open(encoding="utf-8") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            tfidf_only = [row for row in rows if row["method"] == "tfidf"]
+            with results_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(tfidf_only[0].keys()))
+                writer.writeheader()
+                writer.writerows(tfidf_only)
+
+            artifacts = generate_kg_heldout_reporting(
+                results_csv_path=results_csv,
+                output_dir=tmp / "comparisons",
+            )
+
+            pairwise_by_type_path = Path(artifacts["kg_heldout_pairwise_by_type_inference"])
+            with pairwise_by_type_path.open(encoding="utf-8") as csv_file:
+                by_type_headers = next(csv.reader(csv_file))
+            with pairwise_by_type_path.open(encoding="utf-8") as csv_file:
+                by_type_rows = list(csv.DictReader(csv_file))
+            self.assertEqual(by_type_rows, [])
+            self.assertEqual(
+                by_type_headers,
+                [
+                    "entity_type",
+                    "metric",
+                    "method_a",
+                    "method_b",
+                    "paired_unit_count",
+                    "nonzero_delta_count",
+                    "method_a_mean",
+                    "method_b_mean",
+                    "paired_delta",
+                    "ci_lower",
+                    "ci_upper",
+                    "p_value",
+                ],
+            )
+
+            pairwise_overall_path = Path(artifacts["kg_heldout_pairwise_overall_inference"])
+            with pairwise_overall_path.open(encoding="utf-8") as csv_file:
+                overall_headers = next(csv.reader(csv_file))
+            with pairwise_overall_path.open(encoding="utf-8") as csv_file:
+                overall_rows = list(csv.DictReader(csv_file))
+            self.assertEqual(overall_rows, [])
+            self.assertEqual(
+                overall_headers,
+                [
+                    "aggregation_scope",
+                    "metric",
+                    "method_a",
+                    "method_b",
+                    "paired_unit_count",
+                    "nonzero_delta_count",
+                    "method_a_mean",
+                    "method_b_mean",
+                    "paired_delta",
+                    "ci_lower",
+                    "ci_upper",
+                    "p_value",
+                ],
             )
 
     def test_skips_transfer_summary_when_auto_detection_is_unavailable(self) -> None:

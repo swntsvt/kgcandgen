@@ -562,8 +562,27 @@ Generated files:
 - `kg_heldout_macro_summary.csv`
 - `kg_heldout_micro_summary.csv`
 - `kg_heldout_reduction_effectiveness.csv`
+- `kg_heldout_pairwise_by_type_inference.csv`
+- `kg_heldout_pairwise_overall_inference.csv`
 - `kg_heldout_interpretation_scaffold.md`
 - `kg_heldout_transfer_summary.csv` when a compatible selected-settings artifact is available
+
+Inferential testing design:
+
+- Problem: exact paired sign-flip testing scales as `2^n` in the number of non-zero
+  paired deltas, which becomes impractical as held-out comparisons grow.
+- Alternatives considered:
+  - full exact enumeration for all `n`
+  - asymptotic-only approximation
+  - randomization/permutation sampling
+- Chosen approach:
+  - hybrid exact + deterministic randomization
+  - exact paired sign-flip p-values for small `n`
+  - deterministic Monte Carlo sign-flip fallback for larger `n` (fixed seed and
+    fixed draw count)
+- Confidence intervals use deterministic paired bootstrap resampling.
+- Inferential targets include `mrr` and `recall_at_<k>` metrics.
+- `candidate_reduction_ratio` remains descriptive and is not significance-tested.
 
 ## Held-Out Full Run
 
