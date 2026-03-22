@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime
+from itertools import combinations
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
+from src.analysis.heldout_inference import (
+    paired_sign_flip_p_value,
+    paired_bootstrap_confidence_interval,
+)
 from src.method_registry import PRIMARY_COMPARISON_METHODS, ordered_method_names, supports_primary_comparison
 
 logger = logging.getLogger(__name__)
@@ -37,12 +40,18 @@ class KgHeldoutReportingValidationError(ValueError):
 
 
 def _coerce_float(value: object) -> float:
-    if isinstance(value, bool):
+    if isinstance(value, str):
         return float(value)
     if isinstance(value, (int, float)):
         return float(value)
-    if isinstance(value, str):
-        return float(value)
+    # Handle numpy-style scalar objects (for example np.int64 / np.float64).
+    if hasattr(value, "item"):
+        try:
+            scalar_value = value.item()  # type: ignore[call-arg]
+        except (TypeError, ValueError, AttributeError):
+            scalar_value = None
+        if isinstance(scalar_value, (int, float, str)):
+            return float(scalar_value)
     raise TypeError(f"Unsupported float value: {value!r}")
 
 
@@ -248,9 +257,10 @@ def _delta_row(
 
     row: dict[str, object] = {method_column: "delta_tfidf_minus_bm25"}
     for column in value_columns:
+        left_value = _coerce_float(indexed.loc[PRIMARY_COMPARISON_METHODS[0], column])
+        right_value = _coerce_float(indexed.loc[PRIMARY_COMPARISON_METHODS[1], column])
         row[column] = float(
-            indexed.loc[PRIMARY_COMPARISON_METHODS[0], column]
-            - indexed.loc[PRIMARY_COMPARISON_METHODS[1], column]
+            left_value - right_value
         )
     return row
 
@@ -382,10 +392,18 @@ def _build_reduction_effectiveness(
         .sort_index()
     )
 
-    def paired_value(row: pd.Series, metric: str, method: str) -> float:
+    def paired_value(
+        *,
+        track: str,
+        version: str,
+        dataset: str,
+        entity_type: str,
+        metric: str,
+        method: str,
+    ) -> float:
         return _coerce_float(
             paired.loc[
-                (row["track"], row["version"], row["dataset"], row["entity_type"]),
+                (track, version, dataset, entity_type),
                 (metric, method),
             ]
         )
@@ -403,11 +421,21 @@ def _build_reduction_effectiveness(
             if current_method not in other_method_map:
                 deltas.append(None)
                 continue
-            current_value = paired_value(pd.Series(row._asdict()), metric, current_method)
+            current_value = paired_value(
+                track=str(row.track),
+                version=str(row.version),
+                dataset=str(row.dataset),
+                entity_type=str(row.entity_type),
+                metric=metric,
+                method=current_method,
+            )
             other_value = paired_value(
-                pd.Series(row._asdict()),
-                metric,
-                other_method_map[current_method],
+                track=str(row.track),
+                version=str(row.version),
+                dataset=str(row.dataset),
+                entity_type=str(row.entity_type),
+                metric=metric,
+                method=other_method_map[current_method],
             )
             deltas.append(float(current_value - other_value))
         enriched[delta_column] = deltas
@@ -415,6 +443,175 @@ def _build_reduction_effectiveness(
     return enriched.sort_values(
         ["track", "dataset", "entity_type", "method"], kind="mergesort"
     ).reset_index(drop=True)
+
+
+def _pairwise_method_pairs(methods: list[str]) -> list[tuple[str, str]]:
+    """Return canonical unordered method pairs following registry order."""
+    return list(combinations(ordered_method_names(methods), 2))
+
+
+PAIRWISE_INFERENCE_COLUMNS = [
+    "metric",
+    "method_a",
+    "method_b",
+    "paired_unit_count",
+    "nonzero_delta_count",
+    "method_a_mean",
+    "method_b_mean",
+    "paired_delta",
+    "ci_lower",
+    "ci_upper",
+    "p_value",
+]
+
+
+def _empty_pairwise_inference_frame(*, scope_column: str) -> pd.DataFrame:
+    return pd.DataFrame(columns=[scope_column, *PAIRWISE_INFERENCE_COLUMNS])
+
+
+def _build_pairwise_inference_row(
+    paired_frame: pd.DataFrame,
+    *,
+    metric: str,
+    method_a: str,
+    method_b: str,
+    extra_fields: dict[str, object],
+) -> dict[str, object]:
+    method_a_values = paired_frame[method_a].astype(float)
+    method_b_values = paired_frame[method_b].astype(float)
+    deltas = method_a_values - method_b_values
+    ci_lower, ci_upper = paired_bootstrap_confidence_interval(deltas.tolist())
+    return {
+        **extra_fields,
+        "metric": metric,
+        "method_a": method_a,
+        "method_b": method_b,
+        "paired_unit_count": int(len(paired_frame)),
+        "nonzero_delta_count": int((deltas != 0.0).sum()),
+        "method_a_mean": float(method_a_values.mean()),
+        "method_b_mean": float(method_b_values.mean()),
+        "paired_delta": float(deltas.mean()),
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "p_value": paired_sign_flip_p_value(deltas.tolist()),
+    }
+
+
+def _build_pairwise_by_type_inference(
+    frame: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
+    method_pairs = _pairwise_method_pairs(methods)
+    if not method_pairs:
+        return _empty_pairwise_inference_frame(scope_column="entity_type")
+
+    metrics = ["mrr", *recall_columns]
+    rows: list[dict[str, object]] = []
+
+    for entity_type in sorted(REQUIRED_ENTITY_TYPES):
+        subset = frame[frame["entity_type"] == entity_type].copy()
+        for metric in metrics:
+            paired_metric = (
+                subset.pivot(
+                    index=["track", "version", "dataset"],
+                    columns="method",
+                    values=metric,
+                )
+                .sort_index()
+            )
+            for method_a, method_b in method_pairs:
+                rows.append(
+                    _build_pairwise_inference_row(
+                        paired_metric[[method_a, method_b]],
+                        metric=metric,
+                        method_a=method_a,
+                        method_b=method_b,
+                        extra_fields={"entity_type": entity_type},
+                    )
+                )
+
+    result = pd.DataFrame(rows)
+    method_order = {method: index for index, method in enumerate(ordered_method_names(methods))}
+    result["_method_a_order"] = result["method_a"].map(
+        lambda value: method_order.get(str(value), len(method_order))
+    )
+    result["_method_b_order"] = result["method_b"].map(
+        lambda value: method_order.get(str(value), len(method_order))
+    )
+    return result.sort_values(
+        ["entity_type", "metric", "_method_a_order", "_method_b_order", "method_a", "method_b"],
+        kind="mergesort",
+    ).drop(columns=["_method_a_order", "_method_b_order"]).reset_index(drop=True)
+
+
+def _build_pairwise_overall_inference(
+    frame: pd.DataFrame,
+    recall_columns: list[str],
+    methods: list[str],
+) -> pd.DataFrame:
+    method_pairs = _pairwise_method_pairs(methods)
+    if not method_pairs:
+        return _empty_pairwise_inference_frame(scope_column="aggregation_scope")
+
+    metrics = ["mrr", *recall_columns]
+    rows: list[dict[str, object]] = []
+
+    overall_pivot_by_metric: dict[str, pd.DataFrame] = {}
+    for metric in metrics:
+        overall_pivot_by_metric[metric] = (
+            frame.pivot(
+                index=["track", "version", "dataset", "entity_type"],
+                columns="method",
+                values=metric,
+            )
+            .sort_index()
+        )
+
+    type_means = (
+        frame.groupby(["entity_type", "method"], as_index=False)[metrics]
+        .mean(numeric_only=True)
+        .sort_values(["entity_type", "method"], kind="mergesort")
+    )
+    macro_pivot_by_metric: dict[str, pd.DataFrame] = {}
+    for metric in metrics:
+        macro_pivot_by_metric[metric] = (
+            type_means.pivot(index="entity_type", columns="method", values=metric).sort_index()
+        )
+
+    for metric in metrics:
+        for method_a, method_b in method_pairs:
+            rows.append(
+                _build_pairwise_inference_row(
+                    overall_pivot_by_metric[metric][[method_a, method_b]],
+                    metric=metric,
+                    method_a=method_a,
+                    method_b=method_b,
+                    extra_fields={"aggregation_scope": "overall_dataset_type_rows"},
+                )
+            )
+            rows.append(
+                _build_pairwise_inference_row(
+                    macro_pivot_by_metric[metric][[method_a, method_b]],
+                    metric=metric,
+                    method_a=method_a,
+                    method_b=method_b,
+                    extra_fields={"aggregation_scope": "macro_entity_type_means"},
+                )
+            )
+
+    result = pd.DataFrame(rows)
+    method_order = {method: index for index, method in enumerate(ordered_method_names(methods))}
+    result["_method_a_order"] = result["method_a"].map(
+        lambda value: method_order.get(str(value), len(method_order))
+    )
+    result["_method_b_order"] = result["method_b"].map(
+        lambda value: method_order.get(str(value), len(method_order))
+    )
+    return result.sort_values(
+        ["aggregation_scope", "metric", "_method_a_order", "_method_b_order", "method_a", "method_b"],
+        kind="mergesort",
+    ).drop(columns=["_method_a_order", "_method_b_order"]).reset_index(drop=True)
 
 
 def _load_selected_settings_payload(
@@ -515,6 +712,8 @@ def _write_interpretation_scaffold(
     macro_summary: pd.DataFrame,
     micro_summary: pd.DataFrame,
     reduction_effectiveness: pd.DataFrame,
+    pairwise_by_type_inference: pd.DataFrame,
+    pairwise_overall_inference: pd.DataFrame,
     primary_recall_column: str,
     transfer_summary: pd.DataFrame | None,
     transfer_note: str | None,
@@ -552,6 +751,48 @@ def _write_interpretation_scaffold(
     reduction_snapshot = reduction_snapshot.sort_values(
         ["entity_type", "method"], kind="mergesort"
     ).groupby(["entity_type", "method"], as_index=False).mean(numeric_only=True)
+
+    mrr_pairwise_by_type = pairwise_by_type_inference[
+        pairwise_by_type_inference["metric"] == "mrr"
+    ].copy()
+    strongest_pairwise: list[str] = []
+    for entity_type in sorted(REQUIRED_ENTITY_TYPES):
+        group = mrr_pairwise_by_type[mrr_pairwise_by_type["entity_type"] == entity_type].copy()
+        if group.empty:
+            continue
+        ranked = group.assign(abs_delta=group["paired_delta"].abs()).sort_values(
+            ["abs_delta", "method_a", "method_b"],
+            ascending=[False, True, True],
+            kind="mergesort",
+        )
+        best = ranked.iloc[0]
+        strongest_pairwise.append(
+            f"- `{entity_type}`: `{best['method_a']}` vs `{best['method_b']}` "
+            f"delta `{best['paired_delta']:.6f}`, CI [`{best['ci_lower']:.6f}`, `{best['ci_upper']:.6f}`], "
+            f"p-value `{best['p_value']:.6f}`"
+        )
+
+    directional_consistency: list[str] = []
+    for method_a, method_b in _pairwise_method_pairs(methods):
+        pair_rows = mrr_pairwise_by_type[
+            (mrr_pairwise_by_type["method_a"] == method_a)
+            & (mrr_pairwise_by_type["method_b"] == method_b)
+        ].copy()
+        if pair_rows.empty:
+            continue
+        signs = {float(value) > 0.0 for value in pair_rows["paired_delta"] if float(value) != 0.0}
+        status = "directionally consistent" if len(signs) <= 1 else "mixed direction"
+        directional_consistency.append(f"- `{method_a}` vs `{method_b}`: {status}")
+
+    overall_mrr = pairwise_overall_inference[
+        pairwise_overall_inference["metric"] == "mrr"
+    ].copy().sort_values(
+        ["aggregation_scope", "method_a", "method_b"], kind="mergesort"
+    )
+    ci_overlap_zero = mrr_pairwise_by_type[
+        (mrr_pairwise_by_type["ci_lower"] <= 0.0)
+        & (mrr_pairwise_by_type["ci_upper"] >= 0.0)
+    ].copy().sort_values(["entity_type", "method_a", "method_b"], kind="mergesort")
 
     lines = [
         "# KG Held-Out Interpretation Scaffold",
@@ -591,13 +832,42 @@ def _write_interpretation_scaffold(
 
     lines.extend(
         [
-        "## Reduction vs Effectiveness Prompts",
-        "",
-        f"- Review `{primary_recall_column}` alongside `candidate_reduction_ratio` for each entity type.",
-        "- Check whether the higher-reduction method also preserves MRR consistency across entity types.",
-        "",
+            "## Reduction vs Effectiveness Prompts",
+            "",
+            f"- Review `{primary_recall_column}` alongside `candidate_reduction_ratio` for each entity type.",
+            "- Check whether the higher-reduction method also preserves MRR consistency across entity types.",
+            "- Candidate Reduction Ratio is descriptive only and is not included in significance testing.",
+            "",
+            "## Pairwise Inference Snapshot",
+            "",
+            "### Strongest Per-Type MRR Comparisons",
+            "",
+            *strongest_pairwise,
+            "",
+            "### Directional Consistency Across Entity Types",
+            "",
+            *directional_consistency,
+            "",
+            "### Overall MRR Inference",
+            "",
         ]
     )
+    for row in overall_mrr.itertuples(index=False):
+        lines.append(
+            f"- `{row.aggregation_scope}` / `{row.method_a}` vs `{row.method_b}`: "
+            f"delta `{row.paired_delta:.6f}`, CI [`{row.ci_lower:.6f}`, `{row.ci_upper:.6f}`], "
+            f"p-value `{row.p_value:.6f}`"
+        )
+    lines.extend(["", "### MRR Comparisons With CI Overlap At Zero", ""])
+    if ci_overlap_zero.empty:
+        lines.append("- None.")
+    else:
+        for row in ci_overlap_zero.itertuples(index=False):
+            lines.append(
+                f"- `{row.entity_type}` / `{row.method_a}` vs `{row.method_b}` "
+                f"CI [`{row.ci_lower:.6f}`, `{row.ci_upper:.6f}`], p-value `{row.p_value:.6f}`"
+            )
+    lines.append("")
 
     if transfer_summary is not None:
         lines.extend(
@@ -652,6 +922,12 @@ def generate_kg_heldout_reporting(
     macro_summary = _build_macro_summary(by_type_summary, recall_columns, methods)
     micro_summary = _build_micro_summary(validated, recall_columns, methods)
     reduction_effectiveness = _build_reduction_effectiveness(validated, recall_columns, methods)
+    pairwise_by_type_inference = _build_pairwise_by_type_inference(
+        validated, recall_columns, methods
+    )
+    pairwise_overall_inference = _build_pairwise_overall_inference(
+        validated, recall_columns, methods
+    )
 
     selected_settings_json, selected_settings_explicit = _resolve_selected_settings_json(
         selected_settings_path,
@@ -676,6 +952,8 @@ def generate_kg_heldout_reporting(
     macro_path = output_root / "kg_heldout_macro_summary.csv"
     micro_path = output_root / "kg_heldout_micro_summary.csv"
     reduction_path = output_root / "kg_heldout_reduction_effectiveness.csv"
+    pairwise_by_type_path = output_root / "kg_heldout_pairwise_by_type_inference.csv"
+    pairwise_overall_path = output_root / "kg_heldout_pairwise_overall_inference.csv"
     interpretation_path = output_root / "kg_heldout_interpretation_scaffold.md"
     transfer_path = output_root / "kg_heldout_transfer_summary.csv"
     manifest_path = output_root / "manifest.txt"
@@ -684,6 +962,8 @@ def generate_kg_heldout_reporting(
     macro_summary.to_csv(macro_path, index=False)
     micro_summary.to_csv(micro_path, index=False)
     reduction_effectiveness.to_csv(reduction_path, index=False, quoting=csv.QUOTE_MINIMAL)
+    pairwise_by_type_inference.to_csv(pairwise_by_type_path, index=False)
+    pairwise_overall_inference.to_csv(pairwise_overall_path, index=False)
     if transfer_summary is not None:
         transfer_summary.to_csv(transfer_path, index=False)
 
@@ -695,6 +975,8 @@ def generate_kg_heldout_reporting(
         macro_summary=macro_summary,
         micro_summary=micro_summary,
         reduction_effectiveness=reduction_effectiveness,
+        pairwise_by_type_inference=pairwise_by_type_inference,
+        pairwise_overall_inference=pairwise_overall_inference,
         primary_recall_column=primary_recall_column,
         transfer_summary=transfer_summary,
         transfer_note=transfer_note,
@@ -702,7 +984,6 @@ def generate_kg_heldout_reporting(
     )
 
     manifest_lines = [
-        f"generated_at={datetime.now().isoformat(timespec='seconds')}",
         f"source_csv={source_csv}",
         f"output_dir={output_root}",
         f"selected_settings_json={selected_settings_json}" if selected_settings_json is not None else "selected_settings_json=",
@@ -716,6 +997,8 @@ def generate_kg_heldout_reporting(
         "kg_heldout_macro_summary": macro_path,
         "kg_heldout_micro_summary": micro_path,
         "kg_heldout_reduction_effectiveness": reduction_path,
+        "kg_heldout_pairwise_by_type_inference": pairwise_by_type_path,
+        "kg_heldout_pairwise_overall_inference": pairwise_overall_path,
         "kg_heldout_interpretation_scaffold": interpretation_path,
         "manifest": manifest_path,
     }
