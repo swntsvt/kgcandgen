@@ -7,12 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.analysis.plot_env import configure_plot_environment
-
-configure_plot_environment()
-
-import matplotlib
-matplotlib.use("Agg")
+from src.analysis import plot_env as _plot_env  # noqa: F401
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns

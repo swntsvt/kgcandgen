@@ -11,7 +11,7 @@ from src.analysis.model_comparison import (
 
 
 class ModelComparisonTests(unittest.TestCase):
-    def _write_results_csv(self, path: Path) -> None:
+    def _write_results_csv(self, path: Path, *, include_extra_method: bool = False) -> None:
         rows = [
             # biodiv dataset: best MRR and best Recall@10 come from different rows.
             {
@@ -107,6 +107,29 @@ class ModelComparisonTests(unittest.TestCase):
                 "recall_at_50": 0.99,
             },
         ]
+        if include_extra_method:
+            rows.extend(
+                [
+                    {
+                        "track": "biodiv",
+                        "dataset": "d1",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"x"}',
+                        "mrr": 0.50,
+                        "recall_at_10": 0.60,
+                        "recall_at_50": 0.70,
+                    },
+                    {
+                        "track": "conference",
+                        "dataset": "d2",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"y"}',
+                        "mrr": 0.52,
+                        "recall_at_10": 0.62,
+                        "recall_at_50": 0.72,
+                    },
+                ]
+            )
 
         fieldnames = [
             "track",
@@ -188,6 +211,18 @@ class ModelComparisonTests(unittest.TestCase):
             self.assertAlmostEqual(float(agg_target["mrr_median"]), 0.835)
             self.assertAlmostEqual(float(agg_target["recall_at_10_mean"]), 0.90)
             self.assertAlmostEqual(float(agg_target["recall_at_50_mean"]), 0.975)
+
+    def test_ignores_extra_methods_outside_primary_comparison_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_csv = tmp / "result_fixture.csv"
+            self._write_results_csv(source_csv, include_extra_method=True)
+
+            artifacts = generate_model_comparison(source_csv, output_dir=tmp / "comparisons")
+
+            with Path(artifacts["best_of_grid_summary"]).open(encoding="utf-8") as best_file:
+                best_rows = list(csv.DictReader(best_file))
+            self.assertEqual({row["method"] for row in best_rows}, {"tfidf", "bm25"})
 
     def test_win_loss_tie_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

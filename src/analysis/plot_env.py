@@ -18,3 +18,7 @@ def configure_plot_environment() -> None:
 
     os.environ.setdefault("MPLCONFIGDIR", str(mpl_cache_dir))
     os.environ.setdefault("XDG_CACHE_HOME", str(xdg_cache_dir))
+    os.environ.setdefault("MPLBACKEND", "Agg")
+
+
+configure_plot_environment()

@@ -12,7 +12,7 @@ from src.analysis.kg_heldout_reporting import (
 
 
 class KgHeldoutReportingTests(unittest.TestCase):
-    def _write_results_csv(self, path: Path) -> None:
+    def _write_results_csv(self, path: Path, *, include_extra_method: bool = False) -> None:
         rows = [
             {
                 "track": "kg",
@@ -208,6 +208,108 @@ class KgHeldoutReportingTests(unittest.TestCase):
             },
         ]
 
+        if include_extra_method:
+            rows.extend(
+                [
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d1",
+                        "entity_type": "class",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 10,
+                        "target_pool_size": 100,
+                        "retained_candidate_size": 50,
+                        "candidate_reduction_ratio": 0.50,
+                        "recall_at_1": 0.65,
+                        "recall_at_50": 0.91,
+                        "mrr": 0.82,
+                        "runtime_seconds": 0.08,
+                    },
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d2",
+                        "entity_type": "class",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 1,
+                        "target_pool_size": 80,
+                        "retained_candidate_size": 40,
+                        "candidate_reduction_ratio": 0.50,
+                        "recall_at_1": 0.45,
+                        "recall_at_50": 0.75,
+                        "mrr": 0.62,
+                        "runtime_seconds": 0.07,
+                    },
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d1",
+                        "entity_type": "predicate",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 1,
+                        "target_pool_size": 20,
+                        "retained_candidate_size": 5,
+                        "candidate_reduction_ratio": 0.75,
+                        "recall_at_1": 0.25,
+                        "recall_at_50": 0.52,
+                        "mrr": 0.45,
+                        "runtime_seconds": 0.05,
+                    },
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d2",
+                        "entity_type": "predicate",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 1,
+                        "target_pool_size": 10,
+                        "retained_candidate_size": 4,
+                        "candidate_reduction_ratio": 0.60,
+                        "recall_at_1": 0.25,
+                        "recall_at_50": 0.68,
+                        "mrr": 0.57,
+                        "runtime_seconds": 0.05,
+                    },
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d1",
+                        "entity_type": "instance",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 1,
+                        "target_pool_size": 200,
+                        "retained_candidate_size": 50,
+                        "candidate_reduction_ratio": 0.75,
+                        "recall_at_1": 0.12,
+                        "recall_at_50": 0.38,
+                        "mrr": 0.31,
+                        "runtime_seconds": 0.09,
+                    },
+                    {
+                        "track": "kg",
+                        "version": "heldout-v1",
+                        "dataset": "d2",
+                        "entity_type": "instance",
+                        "method": "chargram",
+                        "hyperparameters": '{"cfg":"chargram"}',
+                        "gold_count": 20,
+                        "target_pool_size": 150,
+                        "retained_candidate_size": 50,
+                        "candidate_reduction_ratio": 2.0 / 3.0,
+                        "recall_at_1": 0.42,
+                        "recall_at_50": 0.62,
+                        "mrr": 0.52,
+                        "runtime_seconds": 0.11,
+                    },
+                ]
+            )
+
         with path.open("w", encoding="utf-8", newline="") as csv_file:
             writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
             writer.writeheader()
@@ -324,6 +426,41 @@ class KgHeldoutReportingTests(unittest.TestCase):
             self.assertAlmostEqual(float(transfer_tfidf["development_mu"]), 0.88)
             self.assertAlmostEqual(float(transfer_tfidf["heldout_macro_mrr"]), (0.8 + 0.5 + 0.4) / 3.0)
             self.assertAlmostEqual(float(transfer_tfidf["heldout_micro_mrr"]), 21.0 / 34.0)
+
+    def test_method_agnostic_summaries_allow_extra_methods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            results_csv = tmp / "heldout_result_fixture.csv"
+            selected_json = tmp / "heldout_selected_settings.json"
+            self._write_results_csv(results_csv, include_extra_method=True)
+            self._write_selected_settings(selected_json)
+
+            artifacts = generate_kg_heldout_reporting(
+                results_csv_path=results_csv,
+                output_dir=tmp / "comparisons",
+                selected_settings_path=selected_json,
+            )
+
+            with Path(artifacts["kg_heldout_by_type_summary"]).open(encoding="utf-8") as csv_file:
+                by_type_rows = list(csv.DictReader(csv_file))
+            self.assertIn("chargram", {row["method"] for row in by_type_rows})
+
+            with Path(artifacts["kg_heldout_macro_summary"]).open(encoding="utf-8") as csv_file:
+                macro_rows = list(csv.DictReader(csv_file))
+            self.assertIn("chargram", {row["method"] for row in macro_rows})
+            self.assertIn("delta_tfidf_minus_bm25", {row["method"] for row in macro_rows})
+
+            with Path(artifacts["kg_heldout_micro_summary"]).open(encoding="utf-8") as csv_file:
+                micro_rows = list(csv.DictReader(csv_file))
+            self.assertIn("chargram", {row["method"] for row in micro_rows})
+
+            with Path(artifacts["kg_heldout_reduction_effectiveness"]).open(
+                encoding="utf-8"
+            ) as csv_file:
+                reduction_rows = list(csv.DictReader(csv_file))
+            chargram_row = next(row for row in reduction_rows if row["method"] == "chargram")
+            self.assertEqual(chargram_row["other_method"], "")
+            self.assertEqual(chargram_row["mrr_delta_vs_other_method"], "")
 
     def test_reduction_effectiveness_includes_per_pair_deltas(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

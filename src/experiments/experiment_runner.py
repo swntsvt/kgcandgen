@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.method_registry import ordered_method_names
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.label_extractor import extract_entity_label
@@ -199,10 +200,16 @@ def _build_model_runs(
     tfidf_grid: list[TfidfGridEntry], bm25_grid: list[Bm25GridEntry]
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
-    for params in tfidf_grid:
-        model_runs.append(_build_tfidf_model_run(params))
-    for params in bm25_grid:
-        model_runs.append(_build_bm25_model_run(params))
+    for method_name in ordered_method_names(("tfidf", "bm25")):
+        if method_name == "tfidf":
+            for params in tfidf_grid:
+                model_runs.append(_build_tfidf_model_run(params))
+            continue
+        if method_name == "bm25":
+            for params in bm25_grid:
+                model_runs.append(_build_bm25_model_run(params))
+            continue
+        raise ValueError(f"Unsupported registered development method: {method_name}")
     return model_runs
 
 

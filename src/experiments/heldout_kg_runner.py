@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
@@ -17,6 +18,7 @@ from tqdm import tqdm
 from src.config_loader import load_runtime_config
 from src.evaluation.metrics import compute_recall_at_ks_and_mrr
 from src.experiments.experiment_runner import _load_store_with_fallback
+from src.method_registry import heldout_selected_method_names, ordered_method_names
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import load_alignment_mappings
 from src.rdf_utils.entity_partitioning import (
@@ -66,6 +68,14 @@ class HeldoutKgResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+
+
+@dataclass(frozen=True)
+class HeldoutMethodRunSpec:
+    """Resolved held-out method execution configuration."""
+
+    method_name: str
+    hyperparameters: dict[str, object]
 
 
 def _get_git_short_sha() -> str:
@@ -131,7 +141,7 @@ def _load_selected_settings(selected_settings_path: Path) -> dict[str, dict[str,
     }
 
     resolved: dict[str, dict[str, object]] = {}
-    for method in ("tfidf", "bm25"):
+    for method in heldout_selected_method_names():
         entry = selected_settings.get(method)
         if not isinstance(entry, dict):
             raise HeldoutKgRunnerValidationError(
@@ -159,6 +169,67 @@ def _load_selected_settings(selected_settings_path: Path) -> dict[str, dict[str,
         json.dumps(resolved["bm25"], sort_keys=True, separators=(",", ":")),
     )
     return resolved
+
+
+def _build_heldout_method_runs(
+    frozen_settings: dict[str, dict[str, object]],
+) -> list[HeldoutMethodRunSpec]:
+    method_runs: list[HeldoutMethodRunSpec] = []
+    for method_name in ordered_method_names(frozen_settings.keys()):
+        method_runs.append(
+            HeldoutMethodRunSpec(
+                method_name=method_name,
+                hyperparameters=frozen_settings[method_name],
+            )
+        )
+    return method_runs
+
+
+def _predict_for_method(
+    *,
+    method_name: str,
+    hyperparameters: dict[str, object],
+    target_entities: list[str],
+    target_labels_preprocessed: list[str],
+    target_tokens: list[list[str]],
+    source_label_preprocessed_map: dict[str, str],
+    source_token_map: dict[str, list[str]],
+    eval_sources: list[str],
+    k_max: int,
+) -> dict[str, list[tuple[str, float]]]:
+    if method_name == "tfidf":
+        retriever = TfidfRetriever(
+            ngram_range=tuple(cast(list[int], hyperparameters["ngram_range"])),
+            min_df=cast(int | float, hyperparameters["min_df"]),
+            max_df=cast(int | float, hyperparameters["max_df"]),
+            sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
+        )
+        retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
+        return {
+            source_id: retriever.retrieve_preprocessed(
+                source_label_preprocessed_map[source_id],
+                k=k_max,
+            )
+            for source_id in eval_sources
+        }
+
+    if method_name == "bm25":
+        retriever = Bm25Retriever(
+            k1=float(cast(int | float, hyperparameters["k1"])),
+            b=float(cast(int | float, hyperparameters["b"])),
+        )
+        retriever.fit_tokenized(target_entities, target_tokens)
+        return {
+            source_id: retriever.retrieve_tokenized(
+                source_token_map[source_id],
+                k=k_max,
+            )
+            for source_id in eval_sources
+        }
+
+    raise HeldoutKgRunnerValidationError(
+        f"Unsupported registered held-out method '{method_name}'."
+    )
 
 
 def _build_labels(store, entity_ids: list[str]) -> list[str]:
@@ -264,6 +335,7 @@ def run_heldout_kg_experiments(
     runtime_config = load_runtime_config(config_path=config_path, require_heldout=True)
     selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
     frozen_settings = _load_selected_settings(selected_settings_json)
+    method_runs = _build_heldout_method_runs(frozen_settings)
     datasets = runtime_config.heldout_datasets
     if not datasets:
         raise HeldoutKgRunnerValidationError(
@@ -349,8 +421,9 @@ def run_heldout_kg_experiments(
                 candidate_reduction_ratio,
             )
 
-            for method_name in ("tfidf", "bm25"):
-                hyperparameters = frozen_settings[method_name]
+            for method_run in method_runs:
+                method_name = method_run.method_name
+                hyperparameters = method_run.hyperparameters
                 run_start = time.perf_counter()
                 logger.info(
                     "Running held-out dataset='%s' entity_type=%s method=%s hyperparameters=%s",
@@ -359,34 +432,17 @@ def run_heldout_kg_experiments(
                     method_name,
                     hyperparameters,
                 )
-                if method_name == "tfidf":
-                    retriever = TfidfRetriever(
-                        ngram_range=tuple(cast(list[int], hyperparameters["ngram_range"])),
-                        min_df=cast(int | float, hyperparameters["min_df"]),
-                        max_df=cast(int | float, hyperparameters["max_df"]),
-                        sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
-                    )
-                    retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
-                    predictions = {
-                        source_id: retriever.retrieve_preprocessed(
-                            source_label_preprocessed_map[source_id],
-                            k=k_max,
-                        )
-                        for source_id in eval_sources
-                    }
-                else:
-                    retriever = Bm25Retriever(
-                        k1=float(cast(int | float, hyperparameters["k1"])),
-                        b=float(cast(int | float, hyperparameters["b"])),
-                    )
-                    retriever.fit_tokenized(target_entities, target_tokens)
-                    predictions = {
-                        source_id: retriever.retrieve_tokenized(
-                            source_token_map[source_id],
-                            k=k_max,
-                        )
-                        for source_id in eval_sources
-                    }
+                predictions = _predict_for_method(
+                    method_name=method_name,
+                    hyperparameters=hyperparameters,
+                    target_entities=target_entities,
+                    target_labels_preprocessed=target_labels_preprocessed,
+                    target_tokens=target_tokens,
+                    source_label_preprocessed_map=source_label_preprocessed_map,
+                    source_token_map=source_token_map,
+                    eval_sources=eval_sources,
+                    k_max=k_max,
+                )
 
                 raw_recalls, mrr = compute_recall_at_ks_and_mrr(
                     predictions, gold, evaluation_ks

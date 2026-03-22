@@ -10,9 +10,10 @@ from typing import Any
 import pandas as pd
 
 from src.config_loader import load_runtime_config
+from src.method_registry import heldout_selected_method_names
 
 REQUIRED_COLUMNS = {"dataset", "track", "method", "hyperparameters", "mrr"}
-SUPPORTED_METHODS = {"tfidf", "bm25"}
+SUPPORTED_METHODS = tuple(heldout_selected_method_names())
 
 
 class HeldoutSelectionValidationError(ValueError):
@@ -228,7 +229,7 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
 
 def _build_selection_summary(frame: pd.DataFrame, *, lambda_penalty: float) -> pd.DataFrame:
     method_summaries: list[pd.DataFrame] = []
-    for method in sorted(SUPPORTED_METHODS):
+    for method in SUPPORTED_METHODS:
         method_frame = frame[frame["method"] == method].copy()
         if method_frame.empty:
             raise HeldoutSelectionValidationError(f"Missing method rows for '{method}'.")
@@ -242,7 +243,7 @@ def _build_selection_summary(frame: pd.DataFrame, *, lambda_penalty: float) -> p
 
 def _selected_settings_payload(summary: pd.DataFrame) -> dict[str, dict[str, object]]:
     payload: dict[str, dict[str, object]] = {}
-    for method in sorted(SUPPORTED_METHODS):
+    for method in SUPPORTED_METHODS:
         selected = summary[(summary["method"] == method) & (summary["selected"])].reset_index(drop=True)
         if len(selected) != 1:
             raise HeldoutSelectionValidationError(
@@ -339,6 +340,7 @@ def generate_heldout_selection(
                 "source_csv": str(source_csv),
                 "config_path": str(Path(config_path).resolve()),
                 "policy": policy,
+                "selected_method_names": list(SUPPORTED_METHODS),
                 "selected_settings": selected_settings,
                 "heldout_datasets": sorted(runtime_config.heldout_datasets.keys()),
             },

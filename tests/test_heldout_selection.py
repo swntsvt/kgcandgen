@@ -246,6 +246,7 @@ class HeldoutSelectionTests(unittest.TestCase):
             payload = json.loads(
                 Path(artifacts["heldout_selected_settings"]).read_text(encoding="utf-8")
             )
+            self.assertEqual(payload["selected_method_names"], ["tfidf", "bm25"])
             self.assertEqual(set(payload["selected_settings"].keys()), {"tfidf", "bm25"})
             self.assertEqual(payload["policy"]["metric"], "mrr")
             self.assertEqual(payload["policy"]["lambda"], 0.5)
