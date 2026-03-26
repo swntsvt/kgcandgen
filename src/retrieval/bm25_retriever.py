@@ -58,7 +58,7 @@ class Bm25Retriever:
         doc_ids = documents[0]
         score_values = scores[0]
         ranked = sorted(
-            zip(doc_ids, score_values, strict=True),
+            zip(doc_ids, score_values),
             key=lambda pair: (-float(pair[1]), int(pair[0])),
         )
         return [(self._entity_ids[int(doc_id)], float(score)) for doc_id, score in ranked]

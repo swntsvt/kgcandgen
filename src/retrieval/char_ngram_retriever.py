@@ -35,7 +35,7 @@ class CharNgramRetriever:
         if not entity_ids:
             raise ValueError("entity_ids and labels must not be empty.")
 
-        sorted_pairs = sorted(zip(entity_ids, labels, strict=True), key=lambda pair: pair[0])
+        sorted_pairs = sorted(zip(entity_ids, labels), key=lambda pair: pair[0])
         sorted_entity_ids = [entity_id for entity_id, _label in sorted_pairs]
         normalized_labels = [
             normalize_exact_match_text(label) for _entity_id, label in sorted_pairs

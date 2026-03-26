@@ -6,7 +6,6 @@ import argparse
 from datetime import datetime
 import logging
 import json
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -14,8 +13,10 @@ from typing import TYPE_CHECKING
 
 from src.experiments.experiment_runner import run_experiments
 from src.logging_utils import setup_logging
+from src.run_metadata import get_git_short_sha
 
 logger = logging.getLogger("src.main")
+_ADVANCED_HELP = argparse.SUPPRESS
 
 if TYPE_CHECKING:
     from src.experiments.heldout_class_runner import HeldoutClassResultRecord
@@ -23,16 +24,8 @@ if TYPE_CHECKING:
 
 
 def _get_git_short_sha() -> str:
-    repo_root = Path(__file__).resolve().parents[1]
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repo_root,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.SubprocessError, OSError):
-        return "nogit"
+    """Backward-compatible wrapper around shared git metadata helper."""
+    return get_git_short_sha(repo_root=Path(__file__).resolve().parents[1])
 
 
 def generate_heldout_selection(
@@ -48,6 +41,7 @@ def generate_kg_heldout_reporting(
     results_csv_path: str | Path | None,
     output_dir: str | Path,
     selected_settings_path: str | Path | None,
+    query_level_csv_path: str | Path | None = None,
 ) -> dict[str, Path]:
     from src.analysis.kg_heldout_reporting import generate_kg_heldout_reporting as _impl
 
@@ -55,6 +49,7 @@ def generate_kg_heldout_reporting(
         results_csv_path=results_csv_path,
         output_dir=output_dir,
         selected_settings_path=selected_settings_path,
+        query_level_csv_path=query_level_csv_path,
     )
 
 
@@ -164,7 +159,7 @@ def _build_run_parser(parser: argparse.ArgumentParser) -> None:
     progress_group.add_argument(
         "--no-progress",
         action="store_true",
-        help="Force-disable progress bars.",
+        help=_ADVANCED_HELP,
     )
 
 
@@ -275,15 +270,17 @@ def _build_report_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Path to heldout_selected_settings.json. If omitted, the latest "
-            "results/comparisons/**/heldout_selected_settings.json is used when available."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-dir",
         default="results/comparisons",
         help="Directory where held-out reporting artifacts are written (default: results/comparisons).",
+    )
+    parser.add_argument(
+        "--query-level-csv-path",
+        default=None,
+        help=_ADVANCED_HELP,
     )
 
 
@@ -299,10 +296,7 @@ def _build_report_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Path to heldout_selected_settings.json. If omitted, the latest "
-            "results/comparisons/**/heldout_selected_settings.json is used when available."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-dir",
@@ -320,10 +314,7 @@ def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Path to heldout_selected_settings.json. If omitted, the latest "
-            "results/comparisons/**/heldout_selected_settings.json is used."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-csv-path",
@@ -342,7 +333,7 @@ def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     progress_group.add_argument(
         "--no-progress",
         action="store_true",
-        help="Force-disable progress bars.",
+        help=_ADVANCED_HELP,
     )
 
 
@@ -355,10 +346,7 @@ def _build_run_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Path to heldout_selected_settings.json. If omitted, the latest "
-            "results/comparisons/**/heldout_selected_settings.json is used."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-csv-path",
@@ -377,7 +365,7 @@ def _build_run_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
     progress_group.add_argument(
         "--no-progress",
         action="store_true",
-        help="Force-disable progress bars.",
+        help=_ADVANCED_HELP,
     )
 
 
@@ -398,16 +386,12 @@ def _build_heldout_full_run_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Optional heldout_selected_settings.json override. If provided, the selection stage is skipped."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--heldout-results-csv",
         default=None,
-        help=(
-            "Optional held-out KG results CSV override. If provided, the held-out KG run stage is skipped."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-dir",
@@ -417,10 +401,7 @@ def _build_heldout_full_run_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-csv-path",
         default=None,
-        help=(
-            "Explicit output CSV path for the held-out KG run stage. Ignored when --heldout-results-csv "
-            "is provided."
-        ),
+        help=_ADVANCED_HELP,
     )
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
@@ -431,7 +412,7 @@ def _build_heldout_full_run_parser(parser: argparse.ArgumentParser) -> None:
     progress_group.add_argument(
         "--no-progress",
         action="store_true",
-        help="Force-disable progress bars for the held-out KG run stage.",
+        help=_ADVANCED_HELP,
     )
 
 
@@ -452,16 +433,12 @@ def _build_heldout_class_full_run_parser(parser: argparse.ArgumentParser) -> Non
     parser.add_argument(
         "--selected-settings-json",
         default=None,
-        help=(
-            "Optional heldout_selected_settings.json override. If provided, the selection stage is skipped."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--heldout-results-csv",
         default=None,
-        help=(
-            "Optional held-out class-only results CSV override. If provided, the held-out class-only run stage is skipped."
-        ),
+        help=_ADVANCED_HELP,
     )
     parser.add_argument(
         "--output-dir",
@@ -471,10 +448,7 @@ def _build_heldout_class_full_run_parser(parser: argparse.ArgumentParser) -> Non
     parser.add_argument(
         "--output-csv-path",
         default=None,
-        help=(
-            "Explicit output CSV path for the held-out class-only run stage. Ignored when --heldout-results-csv "
-            "is provided."
-        ),
+        help=_ADVANCED_HELP,
     )
     progress_group = parser.add_mutually_exclusive_group()
     progress_group.add_argument(
@@ -485,7 +459,7 @@ def _build_heldout_class_full_run_parser(parser: argparse.ArgumentParser) -> Non
     progress_group.add_argument(
         "--no-progress",
         action="store_true",
-        help="Force-disable progress bars for the held-out class-only run stage.",
+        help=_ADVANCED_HELP,
     )
 
 
@@ -741,6 +715,7 @@ def _run_report_heldout_kg_cli(args: argparse.Namespace) -> int:
         results_csv_path=args.results_csv,
         output_dir=args.output_dir,
         selected_settings_path=args.selected_settings_json,
+        query_level_csv_path=args.query_level_csv_path,
     )
     print(f"Held-Out KG Report Dir: {artifacts['output_dir']}")
     return 0
@@ -778,8 +753,20 @@ def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
         raise FileNotFoundError(
             f"Expected held-out output CSV was not created: {final_output_path}"
         )
+    query_csv_path = _infer_query_level_csv_path(final_output_path)
     print(f"Held-Out KG Results CSV: {final_output_path}")
+    print(f"Held-Out KG Query CSV: {query_csv_path}")
     return 0
+
+
+def _infer_query_level_csv_path(results_csv_path: Path) -> Path:
+    stem = results_csv_path.stem
+    if stem.startswith("heldout_result_"):
+        suffix = stem.removeprefix("heldout_result_")
+        query_name = f"heldout_query_result_{suffix}.csv"
+    else:
+        query_name = f"{stem}_query.csv"
+    return results_csv_path.with_name(query_name)
 
 
 def _run_heldout_class_cli(args: argparse.Namespace) -> int:
@@ -957,6 +944,7 @@ def _run_heldout_full_run_cli(args: argparse.Namespace) -> int:
             results_csv_path=heldout_results_csv,
             output_dir=args.output_dir,
             selected_settings_path=selected_settings_path,
+            query_level_csv_path=_infer_query_level_csv_path(heldout_results_csv),
         )
         report_output_dir = Path(report_artifacts["output_dir"]).resolve()
         stage_status["report_heldout_kg"] = "success"

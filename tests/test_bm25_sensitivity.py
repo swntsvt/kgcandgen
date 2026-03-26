@@ -230,13 +230,43 @@ class Bm25SensitivityTests(unittest.TestCase):
 
             bad_results = tmp / "result_bad.csv"
             bad_results.write_text(
-                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50\n"
-                'd1,biodiv,bm25,"{bad_json}",0.4,0.5,0.6\n',
+                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50,runtime_seconds\n"
+                'd1,biodiv,bm25,"{bad_json}",0.4,0.5,0.6,0.01\n',
                 encoding="utf-8",
             )
 
             with self.assertRaisesRegex(Bm25SensitivityValidationError, "Malformed BM25 hyperparameters JSON"):
                 generate_bm25_sensitivity(bad_results, config_path=config, output_dir=tmp / "comparisons")
+
+    def test_missing_runtime_seconds_raises_validation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source = tmp / "source.rdf"
+            target = tmp / "target.rdf"
+            alignment = tmp / "alignment.rdf"
+            source.write_text("", encoding="utf-8")
+            target.write_text("", encoding="utf-8")
+            alignment.write_text("", encoding="utf-8")
+
+            config = tmp / "runtime.yaml"
+            self._write_config(config, source, target, alignment)
+
+            missing_runtime = tmp / "result_missing_runtime.csv"
+            missing_runtime.write_text(
+                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50\n"
+                'd1,biodiv,bm25,"{\\"k1\\":1.2,\\"b\\":0.75}",0.4,0.5,0.6\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                Bm25SensitivityValidationError,
+                "Missing required BM25 sensitivity column",
+            ):
+                generate_bm25_sensitivity(
+                    missing_runtime,
+                    config_path=config,
+                    output_dir=tmp / "comparisons",
+                )
 
 
 if __name__ == "__main__":

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
+from src.analysis.common import coerce_count, coerce_float, resolve_results_csv
 from src.config_loader import load_runtime_config
 from src.method_registry import heldout_selected_method_names
 
@@ -20,20 +20,24 @@ class HeldoutSelectionValidationError(ValueError):
     """Raised when held-out selection input data is invalid."""
 
 
-def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
-    if results_csv_path is not None:
-        path = Path(results_csv_path).resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Results CSV not found: {path}")
-        return path
+def _coerce_count(value: object) -> int:
+    """Coerce pandas/numpy scalar-like count values to int."""
+    return coerce_count(value)
 
-    candidates = sorted(
-        Path("results").glob("result_*.csv"),
-        key=lambda candidate: candidate.stat().st_mtime,
+
+def _coerce_float(value: object) -> float:
+    """Coerce pandas/numpy scalar-like numeric values to float."""
+    return coerce_float(value)
+
+
+def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
+    """Resolve held-out selection source CSV from explicit path or latest run artifact."""
+    return resolve_results_csv(
+        results_csv_path,
+        default_glob="result_*.csv",
+        explicit_label="Results CSV",
+        latest_not_found_message="No results/result_*.csv files found for held-out selection.",
     )
-    if not candidates:
-        raise FileNotFoundError("No results/result_*.csv files found for held-out selection.")
-    return candidates[-1].resolve()
 
 
 def _canonicalize_hyperparameters(value: str) -> str:
@@ -51,29 +55,35 @@ def _canonicalize_hyperparameters(value: str) -> str:
     return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
-def _validate_results_frame(frame: pd.DataFrame, *, development_datasets: set[str]) -> pd.DataFrame:
+def _validate_results_frame(
+    frame: pd.DataFrame, *, development_datasets: set[str]
+) -> pd.DataFrame:
     missing_columns = sorted(REQUIRED_COLUMNS - set(frame.columns))
     if missing_columns:
         raise HeldoutSelectionValidationError(
-            "Missing required held-out selection column(s): " + ", ".join(missing_columns)
+            "Missing required held-out selection column(s): "
+            + ", ".join(missing_columns)
         )
 
     filtered = frame[frame["method"].astype(str).isin(SUPPORTED_METHODS)].copy()
     if filtered.empty:
-        raise HeldoutSelectionValidationError("No TF-IDF or BM25 rows found in results CSV.")
+        raise HeldoutSelectionValidationError(
+            "No TF-IDF or BM25 rows found in results CSV."
+        )
 
     filtered["dataset"] = filtered["dataset"].astype(str)
     filtered["track"] = filtered["track"].astype(str)
     filtered["method"] = filtered["method"].astype(str)
     filtered["mrr"] = filtered["mrr"].astype(float)
-    filtered["hyperparameters"] = filtered["hyperparameters"].astype(str).apply(
-        _canonicalize_hyperparameters
+    filtered["hyperparameters"] = (
+        filtered["hyperparameters"].astype(str).apply(_canonicalize_hyperparameters)
     )
 
     unknown = sorted(set(filtered["dataset"]) - development_datasets)
     if unknown:
         raise HeldoutSelectionValidationError(
-            "Results CSV contains dataset(s) outside development_datasets: " + ", ".join(unknown)
+            "Results CSV contains dataset(s) outside development_datasets: "
+            + ", ".join(unknown)
         )
     return filtered
 
@@ -92,14 +102,17 @@ def _population_std(values: list[float]) -> float:
     return float(math.sqrt(variance))
 
 
-def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) -> pd.DataFrame:
+def _build_method_summary(
+    method_frame: pd.DataFrame, *, lambda_penalty: float
+) -> pd.DataFrame:
     track_scores: list[dict[str, object]] = []
-    grouped = (
-        method_frame.groupby(["track", "hyperparameters"], as_index=False)
-        .agg(track_mrr_mean=("mrr", "mean"))
+    grouped = method_frame.groupby(["track", "hyperparameters"], as_index=False).agg(
+        track_mrr_mean=("mrr", "mean")
     )
     all_tracks = sorted(str(track) for track in grouped["track"].unique())
-    all_hyperparameters = sorted(str(value) for value in grouped["hyperparameters"].unique())
+    all_hyperparameters = sorted(
+        str(value) for value in grouped["hyperparameters"].unique()
+    )
 
     for track, track_group in grouped.groupby("track", sort=True):
         sorted_group = track_group.sort_values(
@@ -113,7 +126,7 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
                 {
                     "track": str(track),
                     "hyperparameters": str(row.hyperparameters),
-                    "track_mrr_mean": float(row.track_mrr_mean),
+                    "track_mrr_mean": _coerce_float(row.track_mrr_mean),
                     "track_rank": index,
                     "track_score": _normalize_rank_score(index, candidate_count),
                 }
@@ -131,10 +144,14 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
         track_frame.groupby("track")["hyperparameters"].nunique().astype(int).to_dict()
     )
     for hyperparameters in all_hyperparameters:
-        candidate_group = track_frame[track_frame["hyperparameters"] == hyperparameters].copy()
+        candidate_group = track_frame[
+            track_frame["hyperparameters"] == hyperparameters
+        ].copy()
         observed_by_track = {
             str(row.track): row
-            for row in candidate_group.sort_values(["track"], kind="mergesort").itertuples(index=False)
+            for row in candidate_group.sort_values(
+                ["track"], kind="mergesort"
+            ).itertuples(index=False)
         }
 
         completed_rows: list[dict[str, object]] = []
@@ -146,7 +163,7 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
                         "track": track,
                         "hyperparameters": hyperparameters,
                         "track_mrr_mean": None,
-                        "track_rank": int(track_candidate_counts[track]) + 1,
+                        "track_rank": _coerce_count(track_candidate_counts[track]) + 1,
                         "track_score": 0.0,
                         "status": "missing",
                     }
@@ -157,33 +174,37 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
                 {
                     "track": track,
                     "hyperparameters": hyperparameters,
-                    "track_mrr_mean": float(observed.track_mrr_mean),
-                    "track_rank": int(observed.track_rank),
-                    "track_score": float(observed.track_score),
+                    "track_mrr_mean": _coerce_float(observed.track_mrr_mean),
+                    "track_rank": _coerce_count(observed.track_rank),
+                    "track_score": _coerce_float(observed.track_score),
                     "status": "observed",
                 }
             )
 
-        completed_group = pd.DataFrame(completed_rows).sort_values(["track"], kind="mergesort").reset_index(drop=True)
-        scores = [float(value) for value in completed_group["track_score"]]
+        completed_group = (
+            pd.DataFrame(completed_rows)
+            .sort_values(["track"], kind="mergesort")
+            .reset_index(drop=True)
+        )
+        scores = [_coerce_float(value) for value in completed_group["track_score"]]
         mu = float(sum(scores) / len(scores))
         sigma = _population_std(scores)
         heldout_score = float(mu - (lambda_penalty * sigma))
 
         track_mrr_means = {
             str(row.track): (
-                round(float(row.track_mrr_mean), 12)
-                if row.track_mrr_mean is not None
+                round(_coerce_float(row.track_mrr_mean), 12)
+                if row.track_mrr_mean is not None and pd.notna(row.track_mrr_mean)
                 else None
             )
             for row in completed_group.itertuples(index=False)
         }
         track_ranks = {
-            str(row.track): int(row.track_rank)
+            str(row.track): _coerce_count(row.track_rank)
             for row in completed_group.itertuples(index=False)
         }
         track_normalized_scores = {
-            str(row.track): round(float(row.track_score), 12)
+            str(row.track): round(_coerce_float(row.track_score), 12)
             for row in completed_group.itertuples(index=False)
         }
         track_statuses = {
@@ -195,7 +216,9 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
             {
                 "method": method_name,
                 "hyperparameters": str(hyperparameters),
-                "tracks_observed": int(sum(1 for status in track_statuses.values() if status == "observed")),
+                "tracks_observed": int(
+                    sum(1 for status in track_statuses.values() if status == "observed")
+                ),
                 "tracks_total": int(len(all_tracks)),
                 "track_mrr_means_json": json.dumps(
                     track_mrr_means, sort_keys=True, separators=(",", ":")
@@ -215,11 +238,15 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
             }
         )
 
-    summary = pd.DataFrame(summary_rows).sort_values(
-        ["heldout_score", "mu", "sigma", "hyperparameters"],
-        ascending=[False, False, True, True],
-        kind="mergesort",
-    ).reset_index(drop=True)
+    summary = (
+        pd.DataFrame(summary_rows)
+        .sort_values(
+            ["heldout_score", "mu", "sigma", "hyperparameters"],
+            ascending=[False, False, True, True],
+            kind="mergesort",
+        )
+        .reset_index(drop=True)
+    )
     summary["selection_rank"] = range(1, len(summary) + 1)
     summary["selected"] = False
     if not summary.empty:
@@ -227,24 +254,32 @@ def _build_method_summary(method_frame: pd.DataFrame, *, lambda_penalty: float) 
     return summary
 
 
-def _build_selection_summary(frame: pd.DataFrame, *, lambda_penalty: float) -> pd.DataFrame:
+def _build_selection_summary(
+    frame: pd.DataFrame, *, lambda_penalty: float
+) -> pd.DataFrame:
     method_summaries: list[pd.DataFrame] = []
     for method in SUPPORTED_METHODS:
         method_frame = frame[frame["method"] == method].copy()
         if method_frame.empty:
-            raise HeldoutSelectionValidationError(f"Missing method rows for '{method}'.")
+            raise HeldoutSelectionValidationError(
+                f"Missing method rows for '{method}'."
+            )
         method_summaries.append(
             _build_method_summary(method_frame, lambda_penalty=lambda_penalty)
         )
 
     summary = pd.concat(method_summaries, ignore_index=True)
-    return summary.sort_values(["method", "selection_rank"], kind="mergesort").reset_index(drop=True)
+    return summary.sort_values(
+        ["method", "selection_rank"], kind="mergesort"
+    ).reset_index(drop=True)
 
 
 def _selected_settings_payload(summary: pd.DataFrame) -> dict[str, dict[str, object]]:
     payload: dict[str, dict[str, object]] = {}
     for method in SUPPORTED_METHODS:
-        selected = summary[(summary["method"] == method) & (summary["selected"])].reset_index(drop=True)
+        selected = summary[
+            (summary["method"] == method) & (summary["selected"])
+        ].reset_index(drop=True)
         if len(selected) != 1:
             raise HeldoutSelectionValidationError(
                 f"Expected exactly one selected setting for method '{method}'."
@@ -254,10 +289,10 @@ def _selected_settings_payload(summary: pd.DataFrame) -> dict[str, dict[str, obj
             "method": method,
             "hyperparameters": json.loads(str(row["hyperparameters"])),
             "hyperparameters_json": str(row["hyperparameters"]),
-            "mu": float(row["mu"]),
-            "sigma": float(row["sigma"]),
-            "heldout_score": float(row["heldout_score"]),
-            "tracks_observed": int(row["tracks_observed"]),
+            "mu": _coerce_float(row["mu"]),
+            "sigma": _coerce_float(row["sigma"]),
+            "heldout_score": _coerce_float(row["heldout_score"]),
+            "tracks_observed": _coerce_count(row["tracks_observed"]),
         }
     return payload
 
@@ -321,7 +356,7 @@ def generate_heldout_selection(
     )
     summary = _build_selection_summary(
         validated,
-        lambda_penalty=float(policy["lambda"]),
+        lambda_penalty=_coerce_float(policy["lambda"]),
     )
     selected_settings = _selected_settings_payload(summary)
 

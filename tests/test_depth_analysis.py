@@ -226,6 +226,99 @@ class DepthAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(DepthAnalysisValidationError, "Missing required depth-analysis column"):
                 generate_depth_analysis(bad_csv, output_dir=Path(tmpdir) / "comparisons")
 
+    def test_best_settings_are_selected_per_track(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            source_csv = tmp / "result_fixture.csv"
+            rows = [
+                {
+                    "track": "biodiv",
+                    "version": "v1",
+                    "dataset": "shared_dataset",
+                    "method": "tfidf",
+                    "hyperparameters": '{"cfg":"biodiv_best"}',
+                    "gold_count": 10,
+                    "candidate_size": 50,
+                    "dataset_prep_seconds": 0.1,
+                    "recall_at_1": 0.10,
+                    "recall_at_5": 0.30,
+                    "recall_at_10": 0.50,
+                    "recall_at_20": 0.60,
+                    "recall_at_50": 0.70,
+                    "mrr": 0.60,
+                    "runtime_seconds": 0.2,
+                },
+                {
+                    "track": "biodiv",
+                    "version": "v1",
+                    "dataset": "shared_dataset",
+                    "method": "tfidf",
+                    "hyperparameters": '{"cfg":"biodiv_worse"}',
+                    "gold_count": 10,
+                    "candidate_size": 50,
+                    "dataset_prep_seconds": 0.1,
+                    "recall_at_1": 0.09,
+                    "recall_at_5": 0.29,
+                    "recall_at_10": 0.49,
+                    "recall_at_20": 0.59,
+                    "recall_at_50": 0.69,
+                    "mrr": 0.55,
+                    "runtime_seconds": 0.2,
+                },
+                {
+                    "track": "conference",
+                    "version": "v1",
+                    "dataset": "shared_dataset",
+                    "method": "tfidf",
+                    "hyperparameters": '{"cfg":"conference_best"}',
+                    "gold_count": 10,
+                    "candidate_size": 50,
+                    "dataset_prep_seconds": 0.1,
+                    "recall_at_1": 0.11,
+                    "recall_at_5": 0.31,
+                    "recall_at_10": 0.51,
+                    "recall_at_20": 0.61,
+                    "recall_at_50": 0.71,
+                    "mrr": 0.40,
+                    "runtime_seconds": 0.2,
+                },
+                {
+                    "track": "conference",
+                    "version": "v1",
+                    "dataset": "shared_dataset",
+                    "method": "tfidf",
+                    "hyperparameters": '{"cfg":"conference_worse"}',
+                    "gold_count": 10,
+                    "candidate_size": 50,
+                    "dataset_prep_seconds": 0.1,
+                    "recall_at_1": 0.10,
+                    "recall_at_5": 0.30,
+                    "recall_at_10": 0.50,
+                    "recall_at_20": 0.60,
+                    "recall_at_50": 0.70,
+                    "mrr": 0.35,
+                    "runtime_seconds": 0.2,
+                },
+            ]
+            with source_csv.open("w", encoding="utf-8", newline="") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+
+            artifacts = generate_depth_analysis(source_csv, output_dir=tmp / "comparisons")
+            with Path(artifacts["depth_best_settings"]).open(encoding="utf-8") as best_file:
+                best_rows = list(csv.DictReader(best_file))
+
+            shared_tfidf_rows = [
+                row
+                for row in best_rows
+                if row["dataset"] == "shared_dataset" and row["method"] == "tfidf"
+            ]
+            self.assertEqual(len(shared_tfidf_rows), 2)
+            best_mrr_by_track = {row["track"]: float(row["mrr"]) for row in shared_tfidf_rows}
+            self.assertAlmostEqual(best_mrr_by_track["biodiv"], 0.60)
+            self.assertAlmostEqual(best_mrr_by_track["conference"], 0.40)
+
 
 if __name__ == "__main__":
     unittest.main()

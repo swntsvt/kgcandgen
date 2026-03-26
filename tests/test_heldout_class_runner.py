@@ -152,16 +152,16 @@ class HeldoutClassRunnerTests(unittest.TestCase):
                 show_progress=False,
             )
 
-        self.assertEqual(len(results), 4)
-        self.assertEqual({row["entity_type"] for row in results}, {"class"})
-        self.assertEqual(
-            {row["model"] for row in results},
-            {"tfidf", "bm25", "exact_match", "char_ngram"},
-        )
-        with output_csv.open("r", encoding="utf-8", newline="") as csv_file:
-            rows = list(csv.DictReader(csv_file))
-        self.assertEqual(len(rows), 4)
-        self.assertEqual({row["entity_type"] for row in rows}, {"class"})
+            self.assertEqual(len(results), 4)
+            self.assertEqual({row["entity_type"] for row in results}, {"class"})
+            self.assertEqual(
+                {row["model"] for row in results},
+                {"tfidf", "bm25", "exact_match", "char_ngram"},
+            )
+            with output_csv.open("r", encoding="utf-8", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+            self.assertEqual(len(rows), 4)
+            self.assertEqual({row["entity_type"] for row in rows}, {"class"})
 
     def test_runner_uses_selected_settings_only_for_tunable_methods(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
