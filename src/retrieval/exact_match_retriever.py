@@ -22,7 +22,7 @@ class ExactMatchRetriever:
             raise ValueError("entity_ids and labels must not be empty.")
 
         grouped: dict[str, list[str]] = defaultdict(list)
-        for entity_id, label in zip(entity_ids, labels, strict=True):
+        for entity_id, label in zip(entity_ids, labels):
             grouped[normalize_exact_match_text(label)].append(entity_id)
 
         self._index = {

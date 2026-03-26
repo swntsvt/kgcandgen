@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.analysis.common import coerce_float, resolve_results_csv
 from src.analysis.heldout_inference import (
     paired_bootstrap_confidence_interval,
     paired_sign_flip_p_value,
@@ -43,34 +44,18 @@ class ClassHeldoutReportingValidationError(ValueError):
 
 
 def _coerce_float(value: object) -> float:
-    if isinstance(value, str):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if hasattr(value, "item"):
-        try:
-            scalar_value = value.item()  # type: ignore[call-arg]
-        except (TypeError, ValueError, AttributeError):
-            scalar_value = None
-        if isinstance(scalar_value, (int, float, str)):
-            return float(scalar_value)
-    raise TypeError(f"Unsupported float value: {value!r}")
+    """Backward-compatible wrapper around shared float coercion."""
+    return coerce_float(value)
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
-    if results_csv_path is not None:
-        path = Path(results_csv_path).resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Held-out class-only results CSV not found: {path}")
-        return path
-
-    candidates = sorted(
-        Path("results").glob("heldout_class_result_*.csv"),
-        key=lambda candidate: candidate.stat().st_mtime,
+    """Resolve held-out class reporting source CSV from explicit path or latest run artifact."""
+    return resolve_results_csv(
+        results_csv_path,
+        default_glob="heldout_class_result_*.csv",
+        explicit_label="Held-out class-only results CSV",
+        latest_not_found_message="No results/heldout_class_result_*.csv files found for reporting.",
     )
-    if not candidates:
-        raise FileNotFoundError("No results/heldout_class_result_*.csv files found for reporting.")
-    return candidates[-1].resolve()
 
 
 def _resolve_selected_settings_json(

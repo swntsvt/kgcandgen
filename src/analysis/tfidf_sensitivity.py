@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from src.analysis import plot_env as _plot_env  # noqa: F401
+from src.analysis.common import resolve_results_csv
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -22,6 +23,7 @@ REQUIRED_COLUMNS = {
     "mrr",
     "recall_at_10",
     "recall_at_50",
+    "runtime_seconds",
 }
 
 
@@ -30,19 +32,13 @@ class TfidfSensitivityValidationError(ValueError):
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
-    if results_csv_path is not None:
-        path = Path(results_csv_path).resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Results CSV not found: {path}")
-        return path
-
-    candidates = sorted(
-        Path("results").glob("result_*.csv"),
-        key=lambda candidate: candidate.stat().st_mtime,
+    """Resolve TF-IDF sensitivity source CSV from explicit path or latest run artifact."""
+    return resolve_results_csv(
+        results_csv_path,
+        default_glob="result_*.csv",
+        explicit_label="Results CSV",
+        latest_not_found_message="No results/result_*.csv files found for TF-IDF sensitivity.",
     )
-    if not candidates:
-        raise FileNotFoundError("No results/result_*.csv files found for TF-IDF sensitivity.")
-    return candidates[-1].resolve()
 
 
 def _normalize_df_threshold(value: Any, *, field: str) -> int | float:
@@ -132,14 +128,15 @@ def _prepare_expected_frame(
 
     grid_records: list[dict[str, Any]] = []
     for index, grid_entry in enumerate(tfidf_grid):
+        ngram_range = grid_entry.ngram_range
         grid_records.append(
             {
                 "grid_index": index,
-                "ngram_range": tuple(grid_entry.ngram_range),
+                "ngram_range": ngram_range,
                 "min_df": grid_entry.min_df,
                 "max_df": grid_entry.max_df,
                 "sublinear_tf": grid_entry.sublinear_tf,
-                "ngram_label": _ngram_label(tuple(grid_entry.ngram_range)),
+                "ngram_label": _ngram_label(ngram_range),
                 "min_df_label": _df_label(grid_entry.min_df),
             }
         )
@@ -294,15 +291,16 @@ def _build_interaction_summary(combined: pd.DataFrame) -> pd.DataFrame:
 
     for keys, group in grouped:
         ngram_label, min_df_label = keys
+        ngram_label_text = str(ngram_label)
         success_group = group[group["status"] == "success"]
         success_count = int(len(success_group))
         total_count = int(len(group))
         failure_count = total_count - success_count
         rows.append(
             {
-                "ngram_range": ngram_label,
+                "ngram_range": ngram_label_text,
                 "min_df": min_df_label,
-                "high_order": bool(max(int(part) for part in ngram_label.split("-")) >= 2),
+                "high_order": bool(max(int(part) for part in ngram_label_text.split("-")) >= 2),
                 "success_count": success_count,
                 "failure_count": failure_count,
                 "failure_rate": float(failure_count / total_count) if total_count else 0.0,

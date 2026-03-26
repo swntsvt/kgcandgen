@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from src.analysis import plot_env as _plot_env  # noqa: F401
+from src.analysis.common import coerce_count, coerce_float, resolve_results_csv
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -31,41 +32,23 @@ class DepthAnalysisValidationError(ValueError):
 
 
 def _coerce_count(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Unsupported count value: {value!r}")
+    """Backward-compatible wrapper around shared count coercion."""
+    return coerce_count(value)
 
 
 def _coerce_float(value: object) -> float:
-    if isinstance(value, bool):
-        return float(value)
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        return float(value)
-    raise TypeError(f"Unsupported float value: {value!r}")
+    """Backward-compatible wrapper around shared float coercion."""
+    return coerce_float(value)
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
-    if results_csv_path is not None:
-        path = Path(results_csv_path).resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Results CSV not found: {path}")
-        return path
-
-    candidates = sorted(
-        Path("results").glob("result_*.csv"),
-        key=lambda candidate: candidate.stat().st_mtime,
+    """Resolve depth-analysis source CSV from explicit path or latest run artifact."""
+    return resolve_results_csv(
+        results_csv_path,
+        default_glob="result_*.csv",
+        explicit_label="Results CSV",
+        latest_not_found_message="No results/result_*.csv files found for depth analysis.",
     )
-    if not candidates:
-        raise FileNotFoundError("No results/result_*.csv files found for depth analysis.")
-    return candidates[-1].resolve()
 
 
 def _transition_label(from_k: int, to_k: int) -> str:
@@ -96,11 +79,11 @@ def _validate_and_prepare_frame(frame: pd.DataFrame) -> pd.DataFrame:
 def _select_best_settings(prepared: pd.DataFrame) -> pd.DataFrame:
     ranked = prepared.reset_index(drop=False).rename(columns={"index": "_row_order"})
     ranked = ranked.sort_values(
-        ["dataset", "method", "mrr", "_row_order"],
-        ascending=[True, True, False, True],
+        ["track", "dataset", "method", "mrr", "_row_order"],
+        ascending=[True, True, True, False, True],
         kind="mergesort",
     )
-    best = ranked.groupby(["dataset", "method"], as_index=False).first()
+    best = ranked.groupby(["track", "dataset", "method"], as_index=False).first()
 
     for depth in DEPTHS:
         best[f"effective_k_{depth}"] = best["candidate_size"].apply(

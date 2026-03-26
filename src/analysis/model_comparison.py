@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.analysis import plot_env as _plot_env  # noqa: F401
+from src.analysis.common import coerce_count, resolve_results_csv
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -21,31 +22,18 @@ class ComparisonValidationError(ValueError):
 
 
 def _coerce_count(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        return int(value)
-    raise TypeError(f"Unsupported count value: {value!r}")
+    """Backward-compatible wrapper around shared count coercion."""
+    return coerce_count(value)
 
 
 def _resolve_results_csv(results_csv_path: str | Path | None) -> Path:
-    if results_csv_path is not None:
-        path = Path(results_csv_path).resolve()
-        if not path.exists():
-            raise FileNotFoundError(f"Results CSV not found: {path}")
-        return path
-
-    candidates = sorted(
-        Path("results").glob("result_*.csv"),
-        key=lambda candidate: candidate.stat().st_mtime,
+    """Resolve comparison source CSV from explicit path or latest run artifact."""
+    return resolve_results_csv(
+        results_csv_path,
+        default_glob="result_*.csv",
+        explicit_label="Results CSV",
+        latest_not_found_message="No results/result_*.csv files found for comparison.",
     )
-    if not candidates:
-        raise FileNotFoundError("No results/result_*.csv files found for comparison.")
-    return candidates[-1].resolve()
 
 
 def _validate_results_frame(frame: pd.DataFrame) -> pd.DataFrame:

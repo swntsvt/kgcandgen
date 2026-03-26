@@ -526,7 +526,8 @@ Artifact handoff:
 ## Held-Out KG Runner
 
 Use the dedicated held-out KG runner to evaluate frozen TF-IDF and BM25 settings, plus
-the fixed `exact_match` floor baseline, by entity type across `heldout_datasets`.
+the fixed `exact_match` and `char_ngram` floor baselines, by entity type across
+`heldout_datasets`.
 
 With latest selected-settings artifact (auto-detected):
 
@@ -609,25 +610,14 @@ Inferential testing design:
 
 ## Held-Out Full Run
 
-Use the explicit held-out orchestrator to run selection, held-out KG execution, and
-held-out reporting in one command without mixing this protocol into the development
-`full-run` workflow.
-
-With development results CSV and default output locations:
+The canonical held-out protocol is documented in **End-to-End Held-Out KG Workflow**.
+Use `heldout-full-run` when you want that complete workflow in one command:
 
 ```bash
 python -m src.main heldout-full-run --config-path config/runtime.yaml --dev-results-csv results/result_YYYYMMDD_HHMMSS_<gitsha>.csv
 ```
 
-With explicit selected-settings or held-out results overrides:
-
-```bash
-python -m src.main heldout-full-run --config-path config/runtime.yaml --selected-settings-json results/comparisons/result_YYYYMMDD_HHMMSS_<gitsha>/heldout_selected_settings.json --heldout-results-csv results/heldout_result_YYYYMMDD_HHMMSS_<gitsha>.csv --output-dir results/comparisons
-```
-
-Generated provenance file:
-
-- `heldout_full_run_manifest.txt`
+This command writes `heldout_full_run_manifest.txt` in the final held-out report directory.
 
 ## Secondary Class-Only Held-Out Workflow
 
@@ -803,6 +793,19 @@ Behavior:
 - multiple matches are ranked deterministically by target URI
 - the baseline uses a fixed configuration and does not participate in held-out
   hyperparameter selection
+
+## Character N-Gram Baseline
+
+Use `CharNgramRetriever` from `src/retrieval/char_ngram_retriever.py` for the secondary
+fixed baseline. It scores normalized labels with a TF-IDF vectorizer over
+`analyzer="char_wb"` n-grams and deterministically orders tied scores by entity ID.
+
+Behavior:
+
+- labels are normalized with `normalize_exact_match_text(...)` before vectorization
+- the retriever always uses the fixed `ngram_range=(3, 5)` and a `char_wb` analyzer
+- results are ranked by cosine-equivalent similarity with deterministic tie-breaking
+- this baseline is also fixed and never participates in held-out hyperparameter selection
 
 ## BM25 Retrieval
 

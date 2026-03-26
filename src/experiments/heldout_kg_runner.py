@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime
 import json
 import logging
 from pathlib import Path
-import subprocess
 import sys
 import time
 from typing import TypedDict, cast
@@ -38,6 +36,7 @@ from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
 from src.retrieval.tfidf_retriever import TfidfRetriever
+from src.run_metadata import build_timestamped_results_path, get_git_short_sha
 
 logger = logging.getLogger(__name__)
 
@@ -118,22 +117,12 @@ class HeldoutMethodRunSpec:
 
 
 def _get_git_short_sha() -> str:
-    repo_root = Path(__file__).resolve().parents[2]
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=repo_root,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.SubprocessError, OSError):
-        return "nogit"
+    """Backward-compatible wrapper around shared git metadata helper."""
+    return get_git_short_sha(repo_root=Path(__file__).resolve().parents[2])
 
 
 def _default_output_csv_path() -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    git_sha = _get_git_short_sha()
-    return Path("results") / f"heldout_result_{timestamp}_{git_sha}.csv"
+    return build_timestamped_results_path("heldout_result")
 
 
 def _query_output_csv_path(results_output_csv_path: Path) -> Path:

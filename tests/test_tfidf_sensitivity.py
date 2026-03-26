@@ -223,8 +223,8 @@ class TfidfSensitivityTests(unittest.TestCase):
             self._write_config(config)
             bad_results = tmp / "result_bad.csv"
             bad_results.write_text(
-                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50\n"
-                'd1,biodiv,tfidf,"{bad_json}",0.4,0.5,0.6\n',
+                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50,runtime_seconds\n"
+                'd1,biodiv,tfidf,"{bad_json}",0.4,0.5,0.6,0.01\n',
                 encoding="utf-8",
             )
 
@@ -235,6 +235,33 @@ class TfidfSensitivityTests(unittest.TestCase):
 
             with self.assertRaisesRegex(TfidfSensitivityValidationError, "Malformed TF-IDF hyperparameters JSON"):
                 generate_tfidf_sensitivity(bad_results, config_path=config, output_dir=tmp / "comparisons")
+
+    def test_missing_runtime_seconds_raises_validation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = tmp / "runtime.yaml"
+            self._write_config(config)
+            missing_runtime = tmp / "result_missing_runtime.csv"
+            missing_runtime.write_text(
+                "dataset,track,method,hyperparameters,mrr,recall_at_10,recall_at_50\n"
+                'd1,biodiv,tfidf,"{\\"ngram_range\\":[1,1],\\"min_df\\":1,\\"max_df\\":1.0,\\"sublinear_tf\\":false}",0.4,0.5,0.6\n',
+                encoding="utf-8",
+            )
+
+            source, target, alignment = self._create_dummy_rdf_files()
+            self.addCleanup(lambda: source.unlink(missing_ok=True))
+            self.addCleanup(lambda: target.unlink(missing_ok=True))
+            self.addCleanup(lambda: alignment.unlink(missing_ok=True))
+
+            with self.assertRaisesRegex(
+                TfidfSensitivityValidationError,
+                "Missing required TF-IDF sensitivity column",
+            ):
+                generate_tfidf_sensitivity(
+                    missing_runtime,
+                    config_path=config,
+                    output_dir=tmp / "comparisons",
+                )
 
 
 if __name__ == "__main__":
