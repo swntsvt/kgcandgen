@@ -567,6 +567,38 @@ def _run_grid_diagnostics_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_paired_inference_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--query-csv", nargs="+", required=True, help="Query-level CSV(s).")
+    parser.add_argument("--selected-settings-json", default=None)
+    parser.add_argument("--output-csv", required=True)
+    parser.add_argument(
+        "--metrics", nargs="+", default=["mrr", "recall_at_1", "recall_at_10", "recall_at_50"]
+    )
+    parser.add_argument("--resamples", type=int, default=10_000)
+    parser.add_argument("--seed", type=int, default=20260326)
+    parser.add_argument(
+        "--no-entity-type-scopes",
+        action="store_true",
+        help="Only pooled scopes, no per-entity-type breakdown.",
+    )
+
+
+def _run_paired_inference_cli(args: argparse.Namespace) -> int:
+    from src.analysis.paired_inference import run_paired_inference
+
+    output = run_paired_inference(
+        args.query_csv,
+        selected_settings_path=args.selected_settings_json,
+        output_csv=args.output_csv,
+        metrics=args.metrics,
+        resamples=args.resamples,
+        seed=args.seed,
+        by_entity_type=not args.no_entity_type_scopes,
+    )
+    print(f"Paired inference CSV: {output}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -665,6 +697,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Classify grid configurations as valid, reduced-scoring, feature-losing or failed.",
     )
     _build_grid_diagnostics_parser(grid_diagnostics_parser)
+
+    paired_inference_parser = subparsers.add_parser(
+        "paired-inference",
+        help="Dataset-clustered bootstrap comparisons with Holm correction, micro and macro.",
+    )
+    _build_paired_inference_parser(paired_inference_parser)
 
     return parser
 
@@ -1441,6 +1479,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "paired-inference":
+            return _run_paired_inference_cli(args)
         if args.command == "grid-diagnostics":
             return _run_grid_diagnostics_cli(args)
         if args.command == "dataset-accounting":
