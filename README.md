@@ -129,6 +129,22 @@ Incomplete typing behavior:
 - Mixed-type or untyped gold pairs are skipped and logged.
 - Empty class/predicate/instance partitions are handled without failing execution.
 
+## Revision Analyses (SN Computer Science, round 1)
+
+`REPRODUCE.md` lists every command behind the revised manuscript, run with
+`config/runtime.paper.yaml` (relative paths under `data_root` or `$KGCANDGEN_DATA_ROOT`;
+benchmark checksums in `config/oaei_manifest.csv`, verified by `scripts/fetch_oaei.py`;
+pinned packages in `requirements.lock.txt`). Commands added for the revision:
+
+- `dataset-accounting`: entity counts, gold pairs, exclusions, 1:n structure, label lengths.
+- `efficiency-benchmark`: build time, query latency, peak RSS and index size per method.
+- `grid-diagnostics`: valid / reduced-scoring / feature-loss / failed grid configurations.
+- `paired-inference`: micro and macro deltas with dataset-clustered intervals and Holm.
+- `selection-regret`: held-out MRR each selection rule gives up; needs held-out runs with
+  `run-heldout-kg --full-grid` and `run-heldout-class --full-grid`.
+
+Every runner also writes a per-gold-pair query CSV next to its results CSV.
+
 ## Assumptions and Limitations
 
 - By default (`experiments.alignment_policy: all_targets`) every `=` target of a source is kept,

@@ -341,6 +341,24 @@ heldout:
                 with self.assertRaisesRegex(ValueError, "char_ngram_grid"):
                     load_runtime_config(config_path)
 
+    def test_relative_paths_resolve_against_data_root(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_path = self._write_valid_config(tmp)
+            text = config_path.read_text(encoding="utf-8").replace(str(tmp) + "/", "")
+            config_path.write_text("data_root: .\n" + text, encoding="utf-8")
+            runtime = load_runtime_config(config_path)
+            dataset = runtime.datasets["conference_v1"]
+            self.assertTrue(dataset.source_rdf.is_absolute())
+            self.assertTrue(dataset.source_rdf.exists())
+
+            with patch.dict(os.environ, {"KGCANDGEN_DATA_ROOT": str(tmp / "missing")}):
+                with self.assertRaises(FileNotFoundError):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))

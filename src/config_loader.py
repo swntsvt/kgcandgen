@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from src.retrieval.topk import CANDIDATE_POLICIES, DEFAULT_CANDIDATE_POLICY
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "config/runtime.yaml"
+DATA_ROOT_ENV_VAR = "KGCANDGEN_DATA_ROOT"
 
 REQUIRED_HELDOUT_SELECTION_POLICY = {
     "metric": "mrr",
@@ -169,11 +171,35 @@ def _load_config_content(path: Path) -> dict[str, Any]:
     return content
 
 
+def _resolve_data_root(content: dict[str, Any], config_path: Path) -> Path | None:
+    """Return the root for relative dataset paths: env var, else ``data_root``, else None.
+
+    A relative ``data_root`` is resolved against the config file's directory.
+    """
+    raw = os.environ.get(DATA_ROOT_ENV_VAR) or content.get("data_root")
+    if raw is None:
+        return None
+    root = Path(str(raw)).expanduser()
+    if not root.is_absolute():
+        root = (config_path.parent / root).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"data_root does not exist or is not a directory: {root}")
+    return root
+
+
+def _resolve_dataset_path(raw: Any, data_root: Path | None) -> Path:
+    path = Path(str(raw)).expanduser()
+    if data_root is not None and not path.is_absolute():
+        return data_root / path
+    return path
+
+
 def _validate_dataset_group(
     raw_datasets: Any,
     *,
     field_name: str,
     path: Path,
+    data_root: Path | None = None,
 ) -> dict[str, DatasetConfig]:
     datasets = _ensure_mapping(raw_datasets, field_name)
     logger.info("Discovered %d dataset entry(ies) in %s.%s", len(datasets), path, field_name)
@@ -197,9 +223,9 @@ def _validate_dataset_group(
             )
             raise ValueError(f"{field_name} '{dataset_name}' missing required fields: {missing_str}")
 
-        source_rdf = Path(raw_config["source_rdf"])
-        target_rdf = Path(raw_config["target_rdf"])
-        alignment_rdf = Path(raw_config["alignment_rdf"])
+        source_rdf = _resolve_dataset_path(raw_config["source_rdf"], data_root)
+        target_rdf = _resolve_dataset_path(raw_config["target_rdf"], data_root)
+        alignment_rdf = _resolve_dataset_path(raw_config["alignment_rdf"], data_root)
 
         for label, rdf_path in (
             ("source_rdf", source_rdf),
@@ -240,6 +266,7 @@ def _validate_secondary_heldout_dataset_group(
     raw_datasets: Any,
     *,
     path: Path,
+    data_root: Path | None = None,
 ) -> dict[str, SecondaryHeldoutDatasetConfig]:
     datasets = _ensure_mapping(raw_datasets, "heldout_secondary_datasets")
     logger.info(
@@ -269,9 +296,9 @@ def _validate_secondary_heldout_dataset_group(
                 f"'{dataset_name}' missing required fields: {', '.join(missing)}"
             )
 
-        source_rdf = Path(raw_config["source_rdf"])
-        target_rdf = Path(raw_config["target_rdf"])
-        alignment_rdf = Path(raw_config["alignment_rdf"])
+        source_rdf = _resolve_dataset_path(raw_config["source_rdf"], data_root)
+        target_rdf = _resolve_dataset_path(raw_config["target_rdf"], data_root)
+        alignment_rdf = _resolve_dataset_path(raw_config["alignment_rdf"], data_root)
         for label, rdf_path in (
             ("source_rdf", source_rdf),
             ("target_rdf", target_rdf),
@@ -522,16 +549,21 @@ def load_runtime_config(
         logger.error("Config missing 'heldout' mapping: %s", path)
         raise ValueError("Config must contain a 'heldout' mapping.")
 
+    data_root = _resolve_data_root(content, path)
+    if data_root is not None:
+        logger.info("Resolving relative dataset paths against data_root=%s", data_root)
     development_datasets = _validate_dataset_group(
         content["development_datasets"],
         field_name="development_datasets",
         path=path,
+        data_root=data_root,
     )
     heldout_datasets = (
         _validate_dataset_group(
             content["heldout_datasets"],
             field_name="heldout_datasets",
             path=path,
+            data_root=data_root,
         )
         if "heldout_datasets" in content
         else {}
@@ -540,6 +572,7 @@ def load_runtime_config(
         _validate_secondary_heldout_dataset_group(
             content["heldout_secondary_datasets"],
             path=path,
+            data_root=data_root,
         )
         if "heldout_secondary_datasets" in content
         else {}
