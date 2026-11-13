@@ -272,6 +272,20 @@ heldout:
             runtime_seconds = float(row["runtime_seconds"])
             self.assertGreaterEqual(runtime_seconds, 0.0)
 
+    def test_runner_writes_query_level_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir))
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+            query_csv_path = output_csv_path.with_name("experiment_results_query.csv")
+            self.assertTrue(query_csv_path.exists())
+            with query_csv_path.open("r", encoding="utf-8", newline="") as csv_file:
+                query_rows = list(csv.DictReader(csv_file))
+
+        expected = sum(int(row["gold_count"]) for row in results)
+        self.assertEqual(len(query_rows), expected)
+        self.assertTrue(all(row["entity_type"] == "class" for row in query_rows))
+
     def test_runner_uses_yaml_defined_ks_and_grid_order(self) -> None:
         custom_experiments = """
 experiments:

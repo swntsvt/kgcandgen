@@ -20,6 +20,12 @@ from src.evaluation.metrics import (
     mean_candidate_count,
 )
 from src.experiments.experiment_runner import _load_store_with_fallback
+from src.experiments.query_records import (
+    QueryRecord,
+    build_query_records,
+    query_output_csv_path,
+    write_query_csv,
+)
 from src.method_registry import (
     fixed_method_hyperparameters,
     fixed_method_names,
@@ -391,6 +397,7 @@ def run_heldout_class_experiments(
     alignment_policy = runtime_config.experiments.alignment_policy
 
     results: list[HeldoutClassResultRecord] = []
+    query_results: list[QueryRecord] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -420,6 +427,7 @@ def run_heldout_class_experiments(
         target_labels = _build_labels(target_store, target_entities)
         source_labels = _build_labels(source_store, eval_sources)
         source_label_map = dict(zip(eval_sources, source_labels, strict=True))
+        target_label_map = dict(zip(target_entities, target_labels, strict=True))
         target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
         source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
         source_label_preprocessed_map = dict(
@@ -479,6 +487,22 @@ def run_heldout_class_experiments(
                     alignment_policy=alignment_policy,
                 )
             )
+            query_results.extend(
+                build_query_records(
+                    track=dataset.track,
+                    version=dataset.version,
+                    dataset_name=dataset.name,
+                    entity_type="class",
+                    method_name=method_run.method_name,
+                    hyperparameters=method_run.hyperparameters,
+                    eval_sources=eval_sources,
+                    gold=gold,
+                    predictions=predictions,
+                    source_label_map=source_label_map,
+                    target_label_map=target_label_map,
+                    k_max=k_max,
+                )
+            )
 
     _persist_results_to_csv(
         results,
@@ -489,5 +513,12 @@ def run_heldout_class_experiments(
         "Persisted %d held-out class-only result record(s) to %s",
         len(results),
         resolved_output_csv_path,
+    )
+    query_csv_path = query_output_csv_path(resolved_output_csv_path)
+    write_query_csv(query_results, query_csv_path)
+    logger.info(
+        "Persisted %d held-out class-only query-level record(s) to %s",
+        len(query_results),
+        query_csv_path,
     )
     return results

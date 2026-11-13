@@ -16,6 +16,12 @@ from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
 from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
+from src.experiments.query_records import (
+    QueryRecord,
+    build_query_records,
+    query_output_csv_path,
+    write_query_csv,
+)
 from src.method_registry import development_method_names, fixed_method_hyperparameters
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
 from src.rdf_utils.alignment_parser import (
@@ -312,6 +318,7 @@ def run_experiments(
     )
 
     results: list[ExperimentResultRecord] = []
+    query_results: list[QueryRecord] = []
     errors: list[ExperimentErrorRecord] = []
     datasets_processed = 0
     successful_model_runs = 0
@@ -384,6 +391,7 @@ def run_experiments(
             eval_sources = sorted(gold_filtered.keys())
             source_labels = _build_labels(source_store, eval_sources)
             source_label_map = dict(zip(eval_sources, source_labels, strict=True))
+            target_label_map = dict(zip(target_entities, target_labels, strict=True))
 
             target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
             source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
@@ -498,6 +506,22 @@ def run_experiments(
                         "alignment_policy": alignment_policy,
                     }
                     results.append(result_record)
+                    query_results.extend(
+                        build_query_records(
+                            track=dataset.track,
+                            version=dataset.version,
+                            dataset_name=dataset.name,
+                            entity_type="class",
+                            method_name=run.model_name,
+                            hyperparameters=run.hyperparameters,
+                            eval_sources=eval_sources,
+                            gold=gold_filtered,
+                            predictions=predictions,
+                            source_label_map=source_label_map,
+                            target_label_map=target_label_map,
+                            k_max=k_max,
+                        )
+                    )
                     successful_model_runs += 1
                     recall_label, recall_value = _format_recall_for_log(recalls, evaluation_ks)
                     logger.info(
@@ -553,6 +577,11 @@ def run_experiments(
             "Persisted %d result record(s) to %s",
             len(results),
             resolved_output_csv_path,
+        )
+        query_csv_path = query_output_csv_path(resolved_output_csv_path)
+        write_query_csv(query_results, query_csv_path)
+        logger.info(
+            "Persisted %d query-level record(s) to %s", len(query_results), query_csv_path
         )
     except Exception as exc:
         errors.append(
