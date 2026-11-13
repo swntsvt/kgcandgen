@@ -1,7 +1,7 @@
 # Reproducing the SN Computer Science revision results
 
 Every number in the revised manuscript comes from one run of the commands below at the
-tagged commit `v1.1-sncs-r1`, using `config/runtime.paper.yaml`. The submitted manuscript's
+tagged commit `v1.2-sncs-r1`, using `config/runtime.paper.yaml`. The submitted manuscript's
 numbers come from commit `6a34d4e` (tag `v1.0-submitted`); see "Reproducing the submitted
 version" at the end.
 
@@ -23,6 +23,11 @@ The dense baselines download two pinned Hugging Face models on first use (about 
 `FremyCompany/BioLORD-2023` at revision `167aab52…` (full hashes in
 `config/runtime.paper.yaml`). After the first run, set `HF_HUB_OFFLINE=1` to guarantee that
 the cached revisions are used. Encoding runs on CPU (`device: cpu`) for determinism.
+
+The hybrid baselines (`hybrid_models`) fuse the default character n-gram retriever with
+one of these dense models by reciprocal rank (`rrf_k: 60`, each component's top 50), with
+no tuned weights. Dense and hybrid baselines run with one pinned configuration each and
+never take part in configuration selection.
 
 ## 2. Benchmark data
 

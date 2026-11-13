@@ -59,8 +59,9 @@ def filter_to_selected(
     queries: pd.DataFrame, selected_settings: dict[str, dict[str, object]] | None
 ) -> pd.DataFrame:
     """Keep frozen settings for tuned methods and the fixed baselines; drop sensitivity rows."""
-    # Dense baselines are fixed (one pinned configuration each), like exact match and char n-gram.
-    fixed = queries["method"].isin(FIXED_METHODS) | queries["method"].str.startswith("dense_")
+    # Dense and hybrid baselines are fixed (one pinned configuration each), like exact match
+    # and char n-gram.
+    fixed = queries["method"].isin(FIXED_METHODS) | queries["method"].str.startswith(("dense_", "hybrid_"))
     keep = fixed
     for method, settings in (selected_settings or {}).items():
         encoded = json.dumps(settings, sort_keys=True, separators=(",", ":"))

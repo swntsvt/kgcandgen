@@ -1,4 +1,4 @@
-# Canonical configuration for the SN Computer Science revision (v1.1-sncs-r1).
+# Canonical configuration for the SN Computer Science revision (v1.2-sncs-r1).
 #
 # Dataset paths are relative to data_root (resolved against this file's directory) or to
 # $KGCANDGEN_DATA_ROOT when set. Fetch and verify the benchmark files with:
@@ -8,7 +8,9 @@
 # Grids: the complete 5 x 2 x 2 TF-IDF grid (20 cells; the [2,2] and [2,3] min_df=2 cells
 # fail on two Conference pairs with an empty vocabulary, recorded in the *_errors.csv),
 # the 5 x 4 BM25 grid, and a 24-cell character n-gram sensitivity grid that is reported
-# separately and never used for selection. Dense baselines are listed under dense_models.
+# separately and never used for selection. Dense baselines are listed under dense_models;
+# hybrid_models fuse the default char n-gram retriever with a dense model by reciprocal rank
+# (rrf_k 60, each component's top 50). Neither is tuned.
 data_root: ../data/oaei_track_cache
 experiments:
   evaluation_ks: [1, 5, 10, 20, 50]
@@ -228,6 +230,17 @@ experiments:
     tiers: [class]
     device: cpu
     batch_size: 256
+  hybrid_models:
+  - name: hybrid_char_minilm
+    dense: dense_minilm
+    tiers: [development, kg, class]
+    rrf_k: 60
+    depth: 50
+  - name: hybrid_char_biolord
+    dense: dense_biolord
+    tiers: [class]
+    rrf_k: 60
+    depth: 50
 development_datasets:
   flopo-pto: {track: biodiv, version: '2018', source_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/source.rdf,
     target_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/target.rdf, alignment_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/reference.rdf}

@@ -124,6 +124,19 @@ def make_retriever(
     runtime_options: dict[str, object] | None = None,
 ):
     """Construct an unfitted retriever exposing ``fit(ids, labels)`` and ``retrieve(text, k)``."""
+    if method.startswith("hybrid_"):
+        from src.retrieval.hybrid_retriever import HybridRetriever
+
+        options = runtime_options or {}
+        return HybridRetriever(
+            model_name=str(hyperparameters["model"]),
+            revision=str(hyperparameters["revision"]),
+            device=str(options.get("device", "cpu")),
+            batch_size=int(options.get("batch_size", 256)),  # type: ignore[arg-type]
+            rrf_k=int(hyperparameters["rrf_k"]),  # type: ignore[arg-type]
+            depth=int(hyperparameters["depth"]),  # type: ignore[arg-type]
+            candidate_policy=candidate_policy,  # type: ignore[arg-type]
+        )
     if method.startswith("dense_"):
         from src.retrieval.dense_retriever import DenseRetriever
 
@@ -185,14 +198,14 @@ def measure_method(
 ) -> dict[str, float]:
     """Fit and time one method in the current process. Run it in a fresh process for RSS.
 
-    For dense methods the model is loaded before timing starts, so ``build_seconds`` is
+    For dense and hybrid methods the model is loaded before timing starts, so ``build_seconds`` is
     the encoding of the target labels and the RSS baseline includes the model weights.
     """
     if repeats <= 0:
         raise ValueError("repeats must be positive.")
     if not query_labels:
         raise ValueError("query_labels must not be empty.")
-    if method.startswith("dense_"):
+    if method.startswith(("dense_", "hybrid_")):
         from src.retrieval.dense_retriever import _load_model
 
         options = runtime_options or {}
@@ -430,7 +443,7 @@ def run_efficiency_benchmark(
                             entry.hyperparameters(),
                             {"device": entry.device, "batch_size": entry.batch_size},
                         )
-                        for entry in runtime.experiments.dense_models_for(tier)
+                        for entry in runtime.experiments.fixed_baselines_for(tier)
                         if methods is None or entry.name in set(methods)
                     ),
                 ]

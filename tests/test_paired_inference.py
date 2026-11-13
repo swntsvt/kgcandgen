@@ -88,6 +88,11 @@ class PairedInferenceTests(unittest.TestCase):
         kept = filter_to_selected(grid, {"bm25": {"k1": 0.0}})
         self.assertEqual(kept["hyperparameters"].tolist(), [json.dumps({"k1": 0.0}, separators=(",", ":"))])
 
+    def test_dense_and_hybrid_baselines_are_kept_as_fixed_methods(self) -> None:
+        frame = _queries({"dense_minilm": {("d1", "q1"): 1}, "hybrid_char_minilm": {("d1", "q1"): 2}})
+        kept = filter_to_selected(frame, {"bm25": {"k1": 0.0}})
+        self.assertEqual(sorted(kept["method"].unique()), ["dense_minilm", "hybrid_char_minilm"])
+
 
 if __name__ == "__main__":
     unittest.main()

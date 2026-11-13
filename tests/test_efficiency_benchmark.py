@@ -63,6 +63,18 @@ class EfficiencyBenchmarkTests(unittest.TestCase):
         self.assertIn("t99", first[0])
         self.assertEqual(_subsample_targets(ids, labels, set(), None, seed=1)[0], ids)
 
+    def test_make_retriever_builds_hybrid_from_its_hyperparameters(self) -> None:
+        from src.retrieval.hybrid_retriever import HybridRetriever
+
+        retriever = make_retriever(
+            "hybrid_char_minilm",
+            {"model": "m", "revision": "r", "rrf_k": 30, "depth": 20},
+            "nonzero",
+            {"device": "cpu", "batch_size": 8},
+        )
+        self.assertIsInstance(retriever, HybridRetriever)
+        self.assertEqual((retriever._rrf_k, retriever._depth), (30, 20))
+
     def test_unknown_method_raises(self) -> None:
         with self.assertRaises(ValueError):
             make_retriever("dense", {}, "nonzero")

@@ -99,6 +99,41 @@ class DenseModelEntry:
 
 
 @dataclass(frozen=True)
+class HybridModelEntry:
+    """Reciprocal-rank fusion of the default char n-gram retriever and one dense model."""
+
+    name: str
+    dense: DenseModelEntry
+    tiers: tuple[str, ...]
+    rrf_k: int = 60
+    depth: int = 50
+
+    @property
+    def device(self) -> str:
+        return self.dense.device
+
+    @property
+    def batch_size(self) -> int:
+        return self.dense.batch_size
+
+    def hyperparameters(self) -> dict[str, object]:
+        return {
+            "fusion": "rrf",
+            "rrf_k": self.rrf_k,
+            "depth": self.depth,
+            "lexical": "char_ngram",
+            "lexical_analyzer": "char_wb",
+            "lexical_ngram_range": [3, 5],
+            "model": self.dense.model,
+            "revision": self.dense.revision,
+            "normalization": "light_v1",
+        }
+
+
+FixedBaselineEntry = DenseModelEntry | HybridModelEntry
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     """Validated experiment runtime configuration."""
 
@@ -109,9 +144,15 @@ class ExperimentConfig:
     alignment_policy: str = DEFAULT_ALIGNMENT_POLICY
     char_ngram_grid: tuple[CharNgramGridEntry, ...] = ()
     dense_models: tuple[DenseModelEntry, ...] = ()
+    hybrid_models: tuple[HybridModelEntry, ...] = ()
 
     def dense_models_for(self, tier: str) -> list[DenseModelEntry]:
         return [entry for entry in self.dense_models if tier in entry.tiers]
+
+    def fixed_baselines_for(self, tier: str) -> list[FixedBaselineEntry]:
+        """Dense, then hybrid baselines that run on ``tier`` (pinned, never tuned)."""
+        hybrids = [entry for entry in self.hybrid_models if tier in entry.tiers]
+        return [*self.dense_models_for(tier), *hybrids]
 
 
 @dataclass(frozen=True)
@@ -513,6 +554,41 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
             )
         )
 
+    hybrid_models: list[HybridModelEntry] = []
+    raw_hybrid = experiments.get("hybrid_models", [])
+    if not isinstance(raw_hybrid, list):
+        raise ValueError("experiments.hybrid_models must be a list when provided.")
+    dense_by_name = {entry.name: entry for entry in dense_models}
+    for index, raw_entry in enumerate(raw_hybrid):
+        field = f"experiments.hybrid_models[{index}]"
+        entry = _ensure_mapping(raw_entry, field)
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.startswith("hybrid_"):
+            raise ValueError(f"{field}.name must be a string starting with 'hybrid_'.")
+        if any(existing.name == name for existing in hybrid_models):
+            raise ValueError(f"{field}.name '{name}' is duplicated.")
+        dense_entry = dense_by_name.get(entry.get("dense"))  # type: ignore[arg-type]
+        if dense_entry is None:
+            raise ValueError(f"{field}.dense must name an entry of experiments.dense_models.")
+        tiers = entry.get("tiers", list(dense_entry.tiers))
+        if not isinstance(tiers, list) or not tiers or any(t not in dense_entry.tiers for t in tiers):
+            raise ValueError(
+                f"{field}.tiers must be a non-empty subset of the tiers of '{dense_entry.name}'."
+            )
+        for key, default in (("rrf_k", 60), ("depth", 50)):
+            value = entry.get(key, default)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{field}.{key} must be a positive integer.")
+        hybrid_models.append(
+            HybridModelEntry(
+                name=name,
+                dense=dense_entry,
+                tiers=tuple(tiers),
+                rrf_k=entry.get("rrf_k", 60),
+                depth=entry.get("depth", 50),
+            )
+        )
+
     candidate_policy = experiments.get("candidate_policy", DEFAULT_CANDIDATE_POLICY)
     if candidate_policy not in CANDIDATE_POLICIES:
         raise ValueError(
@@ -541,6 +617,7 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
         alignment_policy=alignment_policy,
         char_ngram_grid=tuple(char_ngram_grid),
         dense_models=tuple(dense_models),
+        hybrid_models=tuple(hybrid_models),
     )
 
 

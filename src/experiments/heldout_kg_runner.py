@@ -13,7 +13,7 @@ from typing import TypedDict, cast
 
 from tqdm import tqdm
 
-from src.config_loader import DenseModelEntry, load_runtime_config
+from src.config_loader import FixedBaselineEntry, load_runtime_config
 from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
 from src.experiments.run_errors import error_record, errors_csv_path, write_errors_csv
 from src.experiments.query_records import (
@@ -43,6 +43,7 @@ from src.rdf_utils.entity_partitioning import (
     partition_alignment_mappings_by_entity_type,
 )
 from src.rdf_utils.label_extractor import extract_entity_label
+from src.retrieval.baselines import build_fixed_baseline
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
@@ -285,19 +286,10 @@ def _predict_for_method(
     eval_sources: list[str],
     k_max: int,
     candidate_policy: str = "nonzero",
-    dense_models: dict[str, DenseModelEntry] | None = None,
+    dense_models: dict[str, FixedBaselineEntry] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
     if dense_models and method_name in dense_models:
-        from src.retrieval.dense_retriever import DenseRetriever
-
-        entry = dense_models[method_name]
-        dense = DenseRetriever(
-            model_name=entry.model,
-            revision=entry.revision,
-            device=entry.device,
-            batch_size=entry.batch_size,
-            candidate_policy=candidate_policy,  # type: ignore[arg-type]
-        )
+        dense = build_fixed_baseline(dense_models[method_name], candidate_policy)
         dense.fit(target_entities, target_labels)
         ranked_lists = dense.retrieve_many(
             [source_label_map[source_id] for source_id in eval_sources], k=k_max
@@ -489,7 +481,7 @@ def run_heldout_kg_experiments(
         selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
         frozen_settings = _load_selected_settings(selected_settings_json)
         method_runs = _build_heldout_method_runs(frozen_settings)
-    dense_entries = runtime_config.experiments.dense_models_for("kg")
+    dense_entries = runtime_config.experiments.fixed_baselines_for("kg")
     dense_models = {entry.name: entry for entry in dense_entries}
     method_runs = [
         *method_runs,

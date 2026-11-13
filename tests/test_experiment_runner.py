@@ -351,6 +351,9 @@ experiments:
       model: stub
       revision: r1
       tiers: [class]
+  hybrid_models:
+    - name: hybrid_char_stub
+      dense: dense_stub
 """
         with tempfile.TemporaryDirectory() as tmpdir, patch(
             "src.retrieval.dense_retriever._load_model", return_value=_StubModel()
@@ -363,6 +366,10 @@ experiments:
         dense_rows = [row for row in results if row["model"].startswith("dense_")]
         self.assertEqual([row["model"] for row in dense_rows], ["dense_stub"])
         self.assertEqual(dense_rows[0]["hyperparameters"]["revision"], "r1")
+        hybrid_rows = [row for row in results if row["model"].startswith("hybrid_")]
+        self.assertEqual([row["model"] for row in hybrid_rows], ["hybrid_char_stub"])
+        self.assertEqual(hybrid_rows[0]["hyperparameters"]["fusion"], "rrf")
+        self.assertGreater(hybrid_rows[0]["mrr"], 0.0)
 
     def test_runner_uses_yaml_defined_ks_and_grid_order(self) -> None:
         custom_experiments = """

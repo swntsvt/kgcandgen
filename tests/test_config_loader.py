@@ -391,6 +391,49 @@ heldout:
                 with self.assertRaisesRegex(ValueError, "dense_models"):
                     load_runtime_config(config_path)
 
+    def test_hybrid_models_reference_a_dense_model_and_follow_its_tiers(self) -> None:
+        good = (
+            "  dense_models:\n"
+            "    - name: dense_minilm\n      model: m\n      revision: abc\n"
+            "    - name: dense_bio\n      model: b\n      revision: def\n      tiers: [class]\n"
+            "  hybrid_models:\n"
+            "    - name: hybrid_char_minilm\n      dense: dense_minilm\n"
+            "    - name: hybrid_char_bio\n      dense: dense_bio\n      rrf_k: 30\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + good, 1),
+                encoding="utf-8",
+            )
+            experiments = load_runtime_config(config_path).experiments
+        self.assertEqual(
+            [e.name for e in experiments.fixed_baselines_for("class")],
+            ["dense_minilm", "dense_bio", "hybrid_char_minilm", "hybrid_char_bio"],
+        )
+        self.assertEqual([e.name for e in experiments.fixed_baselines_for("kg")], ["dense_minilm", "hybrid_char_minilm"])
+        hybrid = experiments.hybrid_models[1]
+        self.assertEqual((hybrid.rrf_k, hybrid.depth, hybrid.device), (30, 50, "cpu"))
+        self.assertEqual(hybrid.hyperparameters()["model"], "b")
+        self.assertEqual(hybrid.hyperparameters()["fusion"], "rrf")
+
+        dense = "  dense_models:\n    - name: dense_bio\n      model: b\n      revision: d\n      tiers: [class]\n"
+        bad_blocks = (
+            dense + "  hybrid_models:\n    - name: char_bio\n      dense: dense_bio\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_missing\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_bio\n      tiers: [kg]\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_bio\n      depth: 0\n",
+        )
+        for block in bad_blocks:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + block, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "hybrid_models"):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))

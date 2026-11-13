@@ -17,7 +17,7 @@ from tqdm import tqdm
 from src.config_loader import (
     Bm25GridEntry,
     CharNgramGridEntry,
-    DenseModelEntry,
+    FixedBaselineEntry,
     TfidfGridEntry,
     load_runtime_config,
 )
@@ -36,6 +36,7 @@ from src.rdf_utils.alignment_parser import (
     multi_target_source_count,
 )
 from src.rdf_utils.label_extractor import extract_entity_label
+from src.retrieval.baselines import build_fixed_baseline, is_fixed_baseline
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
@@ -302,20 +303,12 @@ def _build_char_ngram_sensitivity_run(
     )
 
 
-def _build_dense_model_run(entry: DenseModelEntry, candidate_policy: str = "nonzero") -> ModelRunSpec:
-    # Imported lazily so lexical-only runs never load torch.
-    from src.retrieval.dense_retriever import DenseRetriever
-
+def _build_dense_model_run(entry: FixedBaselineEntry, candidate_policy: str = "nonzero") -> ModelRunSpec:
+    """A pinned dense or hybrid baseline (one configuration, never tuned)."""
     return ModelRunSpec(
         model_name=entry.name,
         hyperparameters=entry.hyperparameters(),
-        retriever=DenseRetriever(
-            model_name=entry.model,
-            revision=entry.revision,
-            device=entry.device,
-            batch_size=entry.batch_size,
-            candidate_policy=candidate_policy,  # type: ignore[arg-type]
-        ),
+        retriever=build_fixed_baseline(entry, candidate_policy),
     )
 
 
@@ -324,7 +317,7 @@ def _build_model_runs(
     bm25_grid: list[Bm25GridEntry],
     candidate_policy: str = "nonzero",
     char_ngram_grid: tuple[CharNgramGridEntry, ...] = (),
-    dense_models: tuple[DenseModelEntry, ...] | list[DenseModelEntry] = (),
+    dense_models: tuple[FixedBaselineEntry, ...] | list[FixedBaselineEntry] = (),
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
     for method_name in development_method_names():
@@ -380,7 +373,7 @@ def run_experiments(
         runtime_config.experiments.bm25_grid,
         candidate_policy,
         runtime_config.experiments.char_ngram_grid,
-        runtime_config.experiments.dense_models_for("development"),
+        runtime_config.experiments.fixed_baselines_for("development"),
     )
 
     logger.info(
@@ -520,7 +513,7 @@ def run_experiments(
                     elif run.model_name in ("char_ngram", CHAR_NGRAM_SENSITIVITY_METHOD):
                         char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
                         char_ngram_retriever.fit(target_entities, target_labels)
-                    elif run.model_name.startswith("dense_"):
+                    elif is_fixed_baseline(run.model_name):
                         run.retriever.fit(target_entities, target_labels)
                     else:
                         raise ValueError(f"Unsupported model type: {run.model_name}")
@@ -532,7 +525,7 @@ def run_experiments(
                         disable=not progress_enabled,
                         leave=False,
                     )
-                    if run.model_name.startswith("dense_"):
+                    if is_fixed_baseline(run.model_name):
                         # Batch-encode all queries; ranking is identical to per-query calls.
                         ranked_lists = run.retriever.retrieve_many(  # type: ignore[attr-defined]
                             [source_label_map[source_id] for source_id in eval_sources], k=k_max
