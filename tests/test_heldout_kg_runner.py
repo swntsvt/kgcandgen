@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from src.experiments.heldout_kg_runner import (
@@ -356,6 +357,38 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "ngram_range": [3, 5],
                     },
                 )
+
+    def test_full_grid_records_failed_cells_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            output_csv = tmp / "results" / "grid.csv"
+            results = run_heldout_kg_experiments(
+                config_path=config, output_csv_path=output_csv, show_progress=False, full_grid=True
+            )
+            errors_csv = output_csv.with_name("grid_errors.csv")
+            self.assertTrue(errors_csv.exists())
+            with errors_csv.open(encoding="utf-8", newline="") as handle:
+                errors = list(csv.DictReader(handle))
+
+        self.assertTrue(errors)
+        self.assertTrue(all(row["method"] == "tfidf" for row in errors))
+        self.assertTrue(any(row["model"] == "bm25" for row in results))
+
+    def test_frozen_run_still_raises_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            selected = tmp / "heldout_selected_settings.json"
+            self._write_selected_settings(selected)
+            with patch(
+                "src.experiments.heldout_kg_runner._predict_for_method",
+                side_effect=RuntimeError("boom"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    run_heldout_kg_experiments(
+                        config_path=config, selected_settings_path=selected, show_progress=False
+                    )
 
     def test_candidate_reduction_ratio_handles_target_pool_smaller_than_kmax(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

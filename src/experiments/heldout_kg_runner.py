@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from src.config_loader import DenseModelEntry, load_runtime_config
 from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
+from src.experiments.run_errors import error_record, errors_csv_path, write_errors_csv
 from src.experiments.query_records import (
     QUERY_CSV_COLUMNS,
     QueryRecord,
@@ -515,6 +516,7 @@ def run_heldout_kg_experiments(
     query_csv_path = _query_output_csv_path(resolved_output_csv_path)
     results: list[HeldoutKgResultRecord] = []
     query_results: list[QueryRecord] = []
+    run_errors: list[dict[str, str]] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -596,21 +598,35 @@ def run_heldout_kg_experiments(
                     method_name,
                     hyperparameters,
                 )
-                predictions = _predict_for_method(
-                    method_name=method_name,
-                    hyperparameters=hyperparameters,
-                    target_entities=target_entities,
-                    target_labels=target_labels,
-                    target_labels_preprocessed=target_labels_preprocessed,
-                    target_tokens=target_tokens,
-                    source_label_map=source_label_map,
-                    source_label_preprocessed_map=source_label_preprocessed_map,
-                    source_token_map=source_token_map,
-                    eval_sources=eval_sources,
-                    k_max=k_max,
-                    candidate_policy=candidate_policy,
-                    dense_models=dense_models,
-                )
+                try:
+                    predictions = _predict_for_method(
+                        method_name=method_name,
+                        hyperparameters=hyperparameters,
+                        target_entities=target_entities,
+                        target_labels=target_labels,
+                        target_labels_preprocessed=target_labels_preprocessed,
+                        target_tokens=target_tokens,
+                        source_label_map=source_label_map,
+                        source_label_preprocessed_map=source_label_preprocessed_map,
+                        source_token_map=source_token_map,
+                        eval_sources=eval_sources,
+                        k_max=k_max,
+                        candidate_policy=candidate_policy,
+                        dense_models=dense_models,
+                    )
+                except Exception as exc:  # noqa: BLE001 - grid cells may legitimately fail
+                    if not full_grid:
+                        raise
+                    run_errors.append(
+                        error_record(
+                            dataset=dataset.name,
+                            entity_type=entity_type.value,
+                            method=method_name,
+                            hyperparameters=hyperparameters,
+                            exc=exc,
+                        )
+                    )
+                    continue
 
                 metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
                 recalls = {k: metrics.recalls[k] for k in evaluation_ks}
@@ -682,6 +698,8 @@ def run_heldout_kg_experiments(
         evaluation_ks=evaluation_ks,
     )
     write_query_csv(query_results, query_csv_path)
+    if full_grid:
+        write_errors_csv(run_errors, errors_csv_path(resolved_output_csv_path))
     logger.info(
         "Persisted %d held-out KG result record(s) to %s",
         len(results),

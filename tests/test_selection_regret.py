@@ -65,6 +65,17 @@ class SelectionRegretTests(unittest.TestCase):
         self.assertAlmostEqual(scores.loc[("tfidf", TF_A), "micro_mrr"], 0.5)
         self.assertNotIn("char_ngram", scores.index.get_level_values(0))
 
+    def test_incomplete_configurations_are_not_post_hoc_best(self) -> None:
+        heldout = _heldout()
+        # TF_B "wins" on h2 only because it failed on h1.
+        heldout = heldout[~((heldout["hyperparameters"] == TF_B) & (heldout["dataset"] == "h1"))]
+        heldout.loc[heldout["hyperparameters"] == TF_B, "mrr"] = 0.99
+        result = selection_regret(_dev(), {"kg": heldout}, lambdas=(0.5,))
+        row = result[(result["rule"] == "lambda=0.5") & (result["method"] == "tfidf")].iloc[0]
+        self.assertEqual(row["best_macro_hyperparameters"], TF_A)
+        self.assertAlmostEqual(row["regret_macro"], 0.0)
+        self.assertEqual(row["configurations"], 1)
+
     def test_missing_configuration_raises(self) -> None:
         heldout = _heldout()
         heldout = heldout[heldout["hyperparameters"] != BM_B]

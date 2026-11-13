@@ -105,9 +105,15 @@ def heldout_config_scores(heldout_grid: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     scores["micro_mrr"] = scores["weighted"] / scores["gold_pairs"]
+    # Configurations that failed on some unit (e.g. an empty TF-IDF vocabulary) average
+    # over fewer units, so they are excluded from ranks and from the post-hoc best.
+    total_units = frame[["dataset", "entity_type"]].drop_duplicates().shape[0]
+    scores["complete"] = scores["units"] == total_units
     for aggregation in ("macro", "micro"):
-        scores[f"{aggregation}_rank"] = scores.groupby("method")[f"{aggregation}_mrr"].rank(
-            ascending=False, method="min"
+        scores[f"{aggregation}_rank"] = (
+            scores[scores["complete"]]
+            .groupby("method")[f"{aggregation}_mrr"]
+            .rank(ascending=False, method="min")
         )
     return scores.drop(columns=["weighted"])
 
@@ -122,12 +128,13 @@ def selection_regret(
     rows: list[dict[str, object]] = []
     for tier, grid in heldout_grids.items():
         scores = heldout_config_scores(grid).set_index(["method", "hyperparameters"])
-        configs = scores.groupby(level="method").size()
+        configs = scores[scores["complete"]].groupby(level="method").size()
         for pick in picks.itertuples():
             key = (pick.method, pick.hyperparameters)
             if key not in scores.index:
                 raise ValueError(f"{tier}: picked configuration missing from held-out grid: {key}")
             method_scores = scores.loc[pick.method]
+            method_scores = method_scores[method_scores["complete"]]
             picked = scores.loc[key]
             row: dict[str, object] = {
                 "tier": tier,
@@ -135,6 +142,7 @@ def selection_regret(
                 "method": pick.method,
                 "hyperparameters": pick.hyperparameters,
                 "configurations": int(configs[pick.method]),
+                "picked_complete": bool(picked["complete"]),
             }
             for aggregation in ("macro", "micro"):
                 best = method_scores[f"{aggregation}_mrr"].max()
@@ -142,7 +150,8 @@ def selection_regret(
                 row[f"best_{aggregation}_mrr"] = float(best)
                 row[f"best_{aggregation}_hyperparameters"] = _argmax(method_scores[f"{aggregation}_mrr"])
                 row[f"regret_{aggregation}"] = float(best - picked[f"{aggregation}_mrr"])
-                row[f"rank_{aggregation}"] = int(picked[f"{aggregation}_rank"])
+                rank = picked[f"{aggregation}_rank"]
+                row[f"rank_{aggregation}"] = int(rank) if pd.notna(rank) else None
             rows.append(row)
     return pd.DataFrame(rows)
 

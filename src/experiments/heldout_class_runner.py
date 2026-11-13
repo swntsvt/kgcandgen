@@ -20,6 +20,7 @@ from src.evaluation.metrics import (
     mean_candidate_count,
 )
 from src.experiments.experiment_runner import _load_store_with_fallback
+from src.experiments.run_errors import error_record, errors_csv_path, write_errors_csv
 from src.experiments.query_records import (
     QueryRecord,
     build_query_records,
@@ -462,6 +463,7 @@ def run_heldout_class_experiments(
 
     results: list[HeldoutClassResultRecord] = []
     query_results: list[QueryRecord] = []
+    run_errors: list[dict[str, str]] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -506,21 +508,35 @@ def run_heldout_class_experiments(
 
         for method_run in method_runs:
             run_start = time.perf_counter()
-            predictions = _predict_for_method(
-                method_name=method_run.method_name,
-                hyperparameters=method_run.hyperparameters,
-                target_entities=target_entities,
-                target_labels=target_labels,
-                target_labels_preprocessed=target_labels_preprocessed,
-                target_tokens=target_tokens,
-                source_label_map=source_label_map,
-                source_label_preprocessed_map=source_label_preprocessed_map,
-                source_token_map=source_token_map,
-                eval_sources=eval_sources,
-                k_max=k_max,
-                candidate_policy=candidate_policy,
-                dense_models=dense_models,
-            )
+            try:
+                predictions = _predict_for_method(
+                    method_name=method_run.method_name,
+                    hyperparameters=method_run.hyperparameters,
+                    target_entities=target_entities,
+                    target_labels=target_labels,
+                    target_labels_preprocessed=target_labels_preprocessed,
+                    target_tokens=target_tokens,
+                    source_label_map=source_label_map,
+                    source_label_preprocessed_map=source_label_preprocessed_map,
+                    source_token_map=source_token_map,
+                    eval_sources=eval_sources,
+                    k_max=k_max,
+                    candidate_policy=candidate_policy,
+                    dense_models=dense_models,
+                )
+            except Exception as exc:  # noqa: BLE001 - grid cells may legitimately fail
+                if not full_grid:
+                    raise
+                run_errors.append(
+                    error_record(
+                        dataset=dataset.name,
+                        entity_type="class",
+                        method=method_run.method_name,
+                        hyperparameters=method_run.hyperparameters,
+                        exc=exc,
+                    )
+                )
+                continue
             metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
             recalls = {k: metrics.recalls[k] for k in evaluation_ks}
             mrr = metrics.mrr
@@ -585,6 +601,8 @@ def run_heldout_class_experiments(
     )
     query_csv_path = query_output_csv_path(resolved_output_csv_path)
     write_query_csv(query_results, query_csv_path)
+    if full_grid:
+        write_errors_csv(run_errors, errors_csv_path(resolved_output_csv_path))
     logger.info(
         "Persisted %d held-out class-only query-level record(s) to %s",
         len(query_results),
