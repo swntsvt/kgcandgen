@@ -31,6 +31,8 @@ QUERY_CSV_COLUMNS: tuple[str, ...] = (
 
 # Results-file prefix -> query-file prefix, so query files sort next to their results.
 _QUERY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("heldout_class_grid_result_", "heldout_class_grid_query_result_"),
+    ("heldout_grid_result_", "heldout_grid_query_result_"),
     ("heldout_class_result_", "heldout_class_query_result_"),
     ("heldout_result_", "heldout_query_result_"),
     ("result_", "query_result_"),

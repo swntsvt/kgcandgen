@@ -209,6 +209,33 @@ def _build_heldout_method_runs(
     return method_runs
 
 
+
+def _build_full_grid_method_runs(runtime_config) -> list[HeldoutMethodRunSpec]:
+    """Every TF-IDF and BM25 grid configuration plus the fixed baselines (for regret analysis)."""
+    runs: list[HeldoutMethodRunSpec] = [
+        HeldoutMethodRunSpec(
+            method_name="tfidf",
+            hyperparameters={
+                "ngram_range": list(entry.ngram_range),
+                "min_df": entry.min_df,
+                "max_df": entry.max_df,
+                "sublinear_tf": entry.sublinear_tf,
+            },
+        )
+        for entry in runtime_config.experiments.tfidf_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(method_name="bm25", hyperparameters={"k1": entry.k1, "b": entry.b})
+        for entry in runtime_config.experiments.bm25_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(
+            method_name=name, hyperparameters=fixed_method_hyperparameters(name)
+        )
+        for name in fixed_method_names(heldout=True)
+    ]
+    return runs
+
 def _coerce_tfidf_ngram_range(value: object) -> tuple[int, int]:
     if not isinstance(value, list) or len(value) != 2:
         raise HeldoutClassRunnerValidationError(
@@ -377,17 +404,27 @@ def run_heldout_class_experiments(
     selected_settings_path: str | Path | None = None,
     output_csv_path: str | Path | None = None,
     show_progress: bool | None = None,
+    full_grid: bool = False,
 ) -> list[HeldoutClassResultRecord]:
     """Run secondary held-out class-only evaluation."""
     validate_nltk_assets()
     progress_enabled = sys.stderr.isatty() if show_progress is None else show_progress
-    resolved_output_csv_path = (
-        Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
-    )
+    if output_csv_path is not None:
+        resolved_output_csv_path = Path(output_csv_path)
+    elif full_grid:
+        resolved_output_csv_path = build_timestamped_results_path("heldout_class_grid_result")
+    else:
+        resolved_output_csv_path = _default_output_csv_path()
     runtime_config = load_runtime_config(config_path=config_path)
-    selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
-    frozen_settings = _load_selected_settings(selected_settings_json)
-    method_runs = _build_heldout_method_runs(frozen_settings)
+    if full_grid:
+        # Post-hoc grid on held-out data, for selection-regret analysis only;
+        # never feeds back into configuration selection.
+        selected_settings_json = None
+        method_runs = _build_full_grid_method_runs(runtime_config)
+    else:
+        selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
+        frozen_settings = _load_selected_settings(selected_settings_json)
+        method_runs = _build_heldout_method_runs(frozen_settings)
     datasets = runtime_config.heldout_secondary_datasets
     if not datasets:
         raise HeldoutClassRunnerValidationError(

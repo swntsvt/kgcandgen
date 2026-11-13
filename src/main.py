@@ -104,6 +104,7 @@ def run_heldout_kg_experiments(
     selected_settings_path: str | Path | None,
     output_csv_path: str | Path | None,
     show_progress: bool | None,
+    full_grid: bool = False,
 ) -> list[HeldoutKgResultRecord]:
     from src.experiments.heldout_kg_runner import (
         run_heldout_kg_experiments as _impl,
@@ -114,6 +115,7 @@ def run_heldout_kg_experiments(
         selected_settings_path=selected_settings_path,
         output_csv_path=output_csv_path,
         show_progress=show_progress,
+        full_grid=full_grid,
     )
 
 
@@ -123,6 +125,7 @@ def run_heldout_class_experiments(
     selected_settings_path: str | Path | None,
     output_csv_path: str | Path | None,
     show_progress: bool | None,
+    full_grid: bool = False,
 ) -> list[HeldoutClassResultRecord]:
     from src.experiments.heldout_class_runner import (
         run_heldout_class_experiments as _impl,
@@ -133,6 +136,7 @@ def run_heldout_class_experiments(
         selected_settings_path=selected_settings_path,
         output_csv_path=output_csv_path,
         show_progress=show_progress,
+        full_grid=full_grid,
     )
 
 
@@ -307,6 +311,14 @@ def _build_report_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
 
 def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--full-grid",
+        action="store_true",
+        help=(
+            "Run every TF-IDF and BM25 grid configuration (post hoc, for selection-regret "
+            "analysis only). Requires --output-csv-path."
+        ),
+    )
+    parser.add_argument(
         "--config-path",
         default="config/runtime.yaml",
         help="Path to runtime YAML config (default: config/runtime.yaml).",
@@ -338,6 +350,14 @@ def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_run_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--full-grid",
+        action="store_true",
+        help=(
+            "Run every TF-IDF and BM25 grid configuration (post hoc, for selection-regret "
+            "analysis only). Requires --output-csv-path."
+        ),
+    )
     parser.add_argument(
         "--config-path",
         default="config/runtime.yaml",
@@ -599,6 +619,31 @@ def _run_paired_inference_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_selection_regret_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--development-csv", required=True, help="Development results CSV.")
+    parser.add_argument(
+        "--heldout-grid",
+        nargs="+",
+        required=True,
+        help="tier=path pairs of held-out --full-grid results, e.g. kg=... bioml=...",
+    )
+    parser.add_argument("--output-csv", required=True)
+    parser.add_argument("--lambdas", nargs="+", type=float, default=[0.0, 0.25, 0.5, 1.0, 2.0])
+
+
+def _run_selection_regret_cli(args: argparse.Namespace) -> int:
+    from src.analysis.selection_regret import parse_tier_csv_arguments, run_selection_regret
+
+    output = run_selection_regret(
+        development_csv=args.development_csv,
+        heldout_grid_csvs=parse_tier_csv_arguments(args.heldout_grid),
+        output_csv=args.output_csv,
+        lambdas=args.lambdas,
+    )
+    print(f"Selection regret CSV: {output}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -703,6 +748,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dataset-clustered bootstrap comparisons with Holm correction, micro and macro.",
     )
     _build_paired_inference_parser(paired_inference_parser)
+
+    selection_regret_parser = subparsers.add_parser(
+        "selection-regret",
+        help="Held-out MRR each development selection rule gives up versus the post-hoc best.",
+    )
+    _build_selection_regret_parser(selection_regret_parser)
 
     return parser
 
@@ -889,11 +940,14 @@ def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
         if args.output_csv_path is None
         else set()
     )
+    if args.full_grid and args.output_csv_path is None:
+        raise ValueError("--full-grid requires --output-csv-path.")
     run_heldout_kg_experiments(
         config_path=args.config_path,
         selected_settings_path=args.selected_settings_json,
         output_csv_path=args.output_csv_path,
         show_progress=show_progress,
+        full_grid=args.full_grid,
     )
     final_output_path = (
         Path(args.output_csv_path)
@@ -927,11 +981,14 @@ def _run_heldout_class_cli(args: argparse.Namespace) -> int:
         if args.output_csv_path is None
         else set()
     )
+    if args.full_grid and args.output_csv_path is None:
+        raise ValueError("--full-grid requires --output-csv-path.")
     run_heldout_class_experiments(
         config_path=args.config_path,
         selected_settings_path=args.selected_settings_json,
         output_csv_path=args.output_csv_path,
         show_progress=show_progress,
+        full_grid=args.full_grid,
     )
     final_output_path = (
         Path(args.output_csv_path)
@@ -1479,6 +1536,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "selection-regret":
+            return _run_selection_regret_cli(args)
         if args.command == "paired-inference":
             return _run_paired_inference_cli(args)
         if args.command == "grid-diagnostics":

@@ -566,6 +566,7 @@ heldout:
                 selected_settings_path=str(tmp / "heldout_selected_settings.json"),
                 output_csv_path=str(output_csv),
                 show_progress=None,
+                full_grid=False,
             )
             self.assertIn(f"Held-Out KG Results CSV: {output_csv}", stdout.getvalue())
             self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
@@ -598,6 +599,7 @@ heldout:
             selected_settings_path=None,
             output_csv_path=None,
             show_progress=None,
+            full_grid=False,
         )
         self.assertIn("Held-Out KG Results CSV:", stdout.getvalue())
         self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
@@ -643,6 +645,7 @@ heldout:
                 selected_settings_path=str(tmp / "heldout_selected_settings.json"),
                 output_csv_path=str(output_csv),
                 show_progress=None,
+                full_grid=False,
             )
             self.assertIn(f"Held-Out Class-Only Results CSV: {output_csv}", stdout.getvalue())
 
@@ -1197,6 +1200,25 @@ heldout:
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
 
+
+
+class MainWrapperPassThroughTests(unittest.TestCase):
+    def test_heldout_wrappers_forward_full_grid(self) -> None:
+        from src import main as main_module
+
+        for wrapper, target in (
+            ("run_heldout_kg_experiments", "src.experiments.heldout_kg_runner.run_heldout_kg_experiments"),
+            ("run_heldout_class_experiments", "src.experiments.heldout_class_runner.run_heldout_class_experiments"),
+        ):
+            with self.subTest(wrapper=wrapper), patch(target) as impl:
+                getattr(main_module, wrapper)(
+                    config_path="c.yaml",
+                    selected_settings_path=None,
+                    output_csv_path="o.csv",
+                    show_progress=False,
+                    full_grid=True,
+                )
+                self.assertTrue(impl.call_args.kwargs["full_grid"])
 
 if __name__ == "__main__":
     unittest.main()
