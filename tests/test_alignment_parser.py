@@ -394,5 +394,39 @@ class AlignmentTargetsTests(unittest.TestCase):
         self.assertEqual(filtered, {"s1": ("t1",)})
 
 
+
+class AlignmentCellSummaryTests(unittest.TestCase):
+    def test_counts_relations_invalid_iris_and_one_to_many(self) -> None:
+        from src.rdf_utils.alignment_parser import alignment_cell_summary
+
+        maps = AlignmentTargetsTests._ONE_TO_MANY + """
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#E"/>
+        <entity2 rdf:resource="http://example.org/target#F"/>
+        <relation>&lt;</relation>
+      </Cell>
+    </map>
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#G"/>
+        <entity2 rdf:resource="PATO_1"/>
+        <relation>=</relation>
+      </Cell>
+    </map>"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "alignment.rdf"
+            path.write_text(_alignment_rdf(maps), encoding="utf-8")
+            summary = alignment_cell_summary(path)
+
+        self.assertEqual(summary["cell_count"], 5)
+        self.assertEqual(summary["equivalence_cell_count"], 4)
+        self.assertEqual(summary["non_equivalence_cell_count"], 1)
+        self.assertEqual(summary["invalid_iri_cell_count"], 1)
+        self.assertEqual(summary["distinct_equivalence_pairs"], 3)
+        self.assertEqual(summary["one_to_many_sources"], 1)
+        self.assertEqual(summary["many_to_one_targets"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -524,6 +524,27 @@ def _run_efficiency_benchmark_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_dataset_accounting_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config-path", default="config/runtime.yaml")
+    parser.add_argument(
+        "--tiers",
+        nargs="+",
+        default=["development", "kg", "class"],
+        choices=["development", "kg", "class"],
+    )
+    parser.add_argument("--output-csv-path", default=None)
+
+
+def _run_dataset_accounting_cli(args: argparse.Namespace) -> int:
+    from src.analysis.dataset_accounting import run_dataset_accounting
+
+    rows = run_dataset_accounting(
+        config_path=args.config_path, tiers=args.tiers, output_csv_path=args.output_csv_path
+    )
+    print(f"Dataset accounting rows written: {len(rows)}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -610,6 +631,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Measure build time, query latency, peak RSS and index size per method.",
     )
     _build_efficiency_benchmark_parser(efficiency_parser)
+
+    accounting_parser = subparsers.add_parser(
+        "dataset-accounting",
+        help="Write entity counts, gold pairs, exclusions and label statistics per dataset.",
+    )
+    _build_dataset_accounting_parser(accounting_parser)
 
     return parser
 
@@ -1386,6 +1413,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "dataset-accounting":
+            return _run_dataset_accounting_cli(args)
         if args.command == "efficiency-benchmark":
             return _run_efficiency_benchmark_cli(args)
         return _run_experiment_cli(args)

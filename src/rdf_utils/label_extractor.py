@@ -44,3 +44,18 @@ def extract_entity_label(graph, uri: str) -> str:
         return sorted(skos_labels)[0]
 
     return _uri_fallback_label(uri)
+
+
+def extract_entity_label_with_source(graph, uri: str) -> tuple[str, str, int]:
+    """Return (label, source, rdfs_label_count); source is rdfs_label, skos_pref_label or uri.
+
+    The label is the same one ``extract_entity_label`` returns.
+    """
+    subject = NamedNode(uri)
+    rdfs_labels = _collect_literal_values(graph, subject, RDFS_LABEL)
+    if rdfs_labels:
+        return sorted(rdfs_labels)[0], "rdfs_label", len(rdfs_labels)
+    skos_labels = _collect_literal_values(graph, subject, SKOS_PREF_LABEL)
+    if skos_labels:
+        return sorted(skos_labels)[0], "skos_pref_label", 0
+    return _uri_fallback_label(uri), "uri", 0

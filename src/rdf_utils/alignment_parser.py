@@ -106,6 +106,12 @@ def _collect_cell_data_rdflib(path: Path) -> dict[str, dict[str, object]]:
 
 def _parse_alignment_cells(alignment_path: str | Path) -> dict[str, dict[str, object]]:
     """Parse alignment RDF/XML into raw per-cell fields, trying stricter parsers first."""
+    return _parse_alignment_cells_with_backend(alignment_path)[0]
+
+
+def _parse_alignment_cells_with_backend(
+    alignment_path: str | Path,
+) -> tuple[dict[str, dict[str, object]], str]:
     path = Path(alignment_path)
     if not path.exists():
         raise FileNotFoundError(f"Alignment file not found: {path}")
@@ -136,7 +142,34 @@ def _parse_alignment_cells(alignment_path: str | Path) -> dict[str, dict[str, ob
                 ) from rdflib_exc
 
     logger.info("Alignment parser backend for %s: %s", path, parser_backend)
-    return cell_data
+    return cell_data, parser_backend
+
+
+def alignment_cell_summary(alignment_path: str | Path) -> dict[str, object]:
+    """Count cells by relation and validity, plus 1:n / n:1 structure of '=' cells."""
+    cell_data, backend = _parse_alignment_cells_with_backend(alignment_path)
+    cells = [fields for fields in cell_data.values() if fields.get("is_cell")]
+    relations: dict[str, int] = defaultdict(int)
+    for fields in cells:
+        relation = fields.get("relation")
+        relations[relation.value if isinstance(relation, ParsedTerm) else "<missing>"] += 1
+    pairs = sorted(set(_iter_equivalence_pairs(cell_data)))
+    by_source: dict[str, set[str]] = defaultdict(set)
+    by_target: dict[str, set[str]] = defaultdict(set)
+    for source, target in pairs:
+        by_source[source].add(target)
+        by_target[target].add(source)
+    return {
+        "parser_backend": backend,
+        "cell_count": len(cells),
+        "equivalence_cell_count": relations.get("=", 0),
+        "non_equivalence_cell_count": len(cells) - relations.get("=", 0),
+        "invalid_iri_cell_count": relations.get("=", 0) - len(_iter_equivalence_pairs(cell_data)),
+        "distinct_equivalence_pairs": len(pairs),
+        "alignment_sources": len(by_source),
+        "one_to_many_sources": sum(1 for v in by_source.values() if len(v) > 1),
+        "many_to_one_targets": sum(1 for v in by_target.values() if len(v) > 1),
+    }
 
 
 def _iter_equivalence_pairs(
