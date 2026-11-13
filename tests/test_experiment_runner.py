@@ -109,6 +109,12 @@ experiments:
 """
 
 
+
+from results_isolation import isolate_results
+
+setUpModule, tearDownModule = isolate_results("src.experiments.experiment_runner")
+
+
 class ExperimentRunnerTests(unittest.TestCase):
     def _write_fixture_dataset(
         self,

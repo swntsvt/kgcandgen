@@ -126,6 +126,12 @@ def _heldout_alignment_rdf(*, include_predicate: bool = True) -> str:
 """
 
 
+
+from results_isolation import isolate_results
+
+setUpModule, tearDownModule = isolate_results("src.experiments.heldout_kg_runner")
+
+
 class HeldoutKgRunnerTests(unittest.TestCase):
     def _write_config(
         self,

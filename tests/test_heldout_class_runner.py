@@ -55,6 +55,12 @@ def _alignment_rdf() -> str:
 """
 
 
+
+from results_isolation import isolate_results
+
+setUpModule, tearDownModule = isolate_results("src.experiments.heldout_class_runner")
+
+
 class HeldoutClassRunnerTests(unittest.TestCase):
     def _write_config(
         self,

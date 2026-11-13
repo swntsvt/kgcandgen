@@ -2,11 +2,16 @@
 
 Usage:
     python scripts/canonical_run.py --label v1.1-sncs-r1 [--data-root PATH] [--skip-efficiency]
+    python scripts/canonical_run.py --label v1.1-sncs-r1 --rehash-only
 
 Steps follow REPRODUCE.md. Each step's printed artefact paths feed the next step. The
 manifest (results/canonical/<label>/manifest.json) records the commit, whether the working
 tree was clean, the environment, every command with its duration and exit status, and the
 SHA-256 of every artefact. The run refuses to start on a dirty tree unless --allow-dirty.
+
+--rehash-only re-runs nothing: it recomputes the artefact list and hashes of an existing
+complete manifest (keeping its commit and steps) and records when and at which commit the
+hashes were recomputed.
 """
 
 from __future__ import annotations
@@ -116,13 +121,80 @@ def _query_csv(results_csv: str) -> str:
     return str(query_output_csv_path(Path(results_csv)))
 
 
+def _errors_csv(results_csv: str) -> str:
+    path = Path(results_csv)
+    return str(path.with_name(f"{path.stem}_errors.csv"))
+
+
+def _collect_artifacts(
+    *, dev: str, selected: str, kg_results: str, cls_results: str, kg_grid: str, cls_grid: str, out: Path
+) -> dict[str, str]:
+    """SHA-256 of every result, query, errors and report file the run produced."""
+    results = [dev, kg_results, cls_results, kg_grid, cls_grid]
+    candidates = {selected}
+    candidates |= set(results) | {_query_csv(path) for path in results} | {_errors_csv(path) for path in results}
+    candidates |= {str(path) for path in out.glob("*.csv")}
+    return {
+        str(Path(path).resolve().relative_to(REPO)): _sha256(Path(path))
+        for path in sorted(candidates)
+        if Path(path).exists()
+    }
+
+
+def _grid_paths(label: str) -> tuple[str, str]:
+    return (
+        str(REPO / "results" / f"heldout_grid_result_{label}.csv"),
+        str(REPO / "results" / f"heldout_class_grid_result_{label}.csv"),
+    )
+
+
+def rehash(label: str) -> int:
+    """Recompute the artefact hashes of an existing complete run without re-running it."""
+    out = REPO / "results" / "canonical" / label
+    manifest_path = out / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("status") != "complete":
+        raise SystemExit(f"{manifest_path} is not a complete run; re-run it instead.")
+    printed = {step["name"]: step["printed_outputs"] for step in manifest["steps"]}
+    kg_grid, cls_grid = _grid_paths(label)
+    artifacts = _collect_artifacts(
+        dev=printed["development"]["Results CSV"],
+        selected=printed["heldout_kg"]["Selected Settings JSON"],
+        kg_results=printed["heldout_kg"]["Held-Out KG Results CSV"],
+        cls_results=printed["heldout_bioml"]["Held-Out Class-Only Results CSV"],
+        kg_grid=kg_grid,
+        cls_grid=cls_grid,
+        out=out,
+    )
+    previous = manifest.get("artifacts_sha256", {})
+    changed = sorted(path for path in previous if path in artifacts and previous[path] != artifacts[path])
+    missing = sorted(set(previous) - set(artifacts))
+    if changed or missing:
+        raise SystemExit(f"Artefacts changed since the run (changed={changed}, missing={missing}); not rewriting.")
+    added = sorted(set(artifacts) - set(previous))
+    manifest["artifacts_sha256"] = artifacts
+    manifest["artifacts_rehashed"] = {
+        "at_commit": _git("rev-parse", "HEAD"),
+        "working_tree_clean": _git("status", "--porcelain", "--untracked-files=no") == "",
+        "written_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "added": added,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    print(f"Rehashed {len(artifacts)} artefacts ({len(added)} added, existing hashes unchanged): {manifest_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
     parser.add_argument("--data-root", default=None, help="Sets KGCANDGEN_DATA_ROOT.")
     parser.add_argument("--skip-efficiency", action="store_true")
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--rehash-only", action="store_true", help="Recompute hashes of an existing run.")
     args = parser.parse_args(argv)
+
+    if args.rehash_only:
+        return rehash(args.label)
 
     if not args.allow_dirty and _git("status", "--porcelain", "--untracked-files=no"):
         raise SystemExit("Working tree has uncommitted changes; commit them or pass --allow-dirty.")
@@ -157,8 +229,7 @@ def main(argv: list[str] | None = None) -> int:
                                        "--dev-results-csv", dev])
     cls_results = cls["Held-Out Class-Only Results CSV"]
 
-    kg_grid = str(REPO / "results" / f"heldout_grid_result_{args.label}.csv")
-    cls_grid = str(REPO / "results" / f"heldout_class_grid_result_{args.label}.csv")
+    kg_grid, cls_grid = _grid_paths(args.label)
     runner.run("heldout_kg_full_grid", ["run-heldout-kg", "--config-path", CONFIG, "--full-grid",
                                         "--no-progress", "--output-csv-path", kg_grid])
     runner.run("heldout_bioml_full_grid", ["run-heldout-class", "--config-path", CONFIG, "--full-grid",
@@ -180,16 +251,10 @@ def main(argv: list[str] | None = None) -> int:
                                   "--selected-settings-json", selected,
                                   "--output-csv-path", str(out / "efficiency.csv")])
 
-    candidates = {dev, dev_query, selected, kg_results, _query_csv(kg_results), cls_results,
-                  _query_csv(cls_results), kg_grid, cls_grid, _query_csv(kg_grid), _query_csv(cls_grid)}
-    candidates |= {str(path) for path in out.glob("*.csv")}
-    errors_csv = Path(dev).with_name(f"{Path(dev).stem}_errors.csv")
-    candidates.add(str(errors_csv))
-    artifacts = {
-        str(Path(path).resolve().relative_to(REPO)): _sha256(Path(path))
-        for path in sorted(candidates)
-        if Path(path).exists()
-    }
+    artifacts = _collect_artifacts(
+        dev=dev, selected=selected, kg_results=kg_results, cls_results=cls_results,
+        kg_grid=kg_grid, cls_grid=cls_grid, out=out,
+    )
     runner.write_manifest(status="complete", artifacts=artifacts)
     print(f"Canonical run complete. Manifest: {out / 'manifest.json'}")
     return 0

@@ -987,7 +987,9 @@ heldout:
         stdout = io.StringIO()
         call_order: list[str] = []
         resolved_csv = Path("results/result_shared.csv")
-        shared_output_dir = Path("results/comparisons/result_shared")
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        shared_output_dir = Path(tmpdir.name) / "comparisons" / "result_shared"
 
         def _mark(name: str):
             def _fn(*_args, **_kwargs):
