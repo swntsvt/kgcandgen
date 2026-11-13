@@ -758,16 +758,25 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _development_result_files(results_dir: Path) -> set[Path]:
+    """Development results CSVs, excluding companion files written next to them."""
+    return {
+        path.resolve()
+        for path in results_dir.glob("result_*.csv")
+        if not path.stem.endswith(("_errors", "_query"))
+    }
+
+
 def _collect_existing_result_files(results_dir: Path = Path("results")) -> set[Path]:
     if not results_dir.exists():
         return set()
-    return {path.resolve() for path in results_dir.glob("result_*.csv")}
+    return _development_result_files(results_dir)
 
 
 def _resolve_new_result_file(
     existing_files: set[Path], results_dir: Path = Path("results")
 ) -> Path:
-    current_files = {path.resolve() for path in results_dir.glob("result_*.csv")}
+    current_files = _development_result_files(results_dir)
     new_files = sorted(current_files - existing_files, key=lambda p: p.stat().st_mtime)
     if not new_files:
         raise FileNotFoundError(

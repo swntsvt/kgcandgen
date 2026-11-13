@@ -1220,5 +1220,29 @@ class MainWrapperPassThroughTests(unittest.TestCase):
                 )
                 self.assertTrue(impl.call_args.kwargs["full_grid"])
 
+
+class ResultFileResolutionTests(unittest.TestCase):
+    def test_new_result_file_ignores_errors_and_query_companions(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from src import main as main_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = Path(tmpdir)
+            existing = main_module._collect_existing_result_files(results)
+            main_csv = results / "result_20260101_000000_abc.csv"
+            main_csv.write_text("x", encoding="utf-8")
+            for name in ("result_20260101_000000_abc_errors.csv", "query_result_20260101_000000_abc.csv"):
+                companion = results / name
+                companion.write_text("x", encoding="utf-8")
+                os.utime(companion, (main_csv.stat().st_mtime + 10,) * 2)
+
+            resolved = main_module._resolve_new_result_file(existing, results)
+
+        self.assertEqual(resolved.name, main_csv.name)
+
+
 if __name__ == "__main__":
     unittest.main()
