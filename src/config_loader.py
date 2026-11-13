@@ -63,6 +63,16 @@ class Bm25GridEntry:
 
 
 @dataclass(frozen=True)
+class CharNgramGridEntry:
+    """Validated character n-gram sensitivity entry (not used for selection)."""
+
+    analyzer: str
+    ngram_range: tuple[int, int]
+    min_df: int
+    sublinear_tf: bool
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     """Validated experiment runtime configuration."""
 
@@ -71,6 +81,7 @@ class ExperimentConfig:
     bm25_grid: list[Bm25GridEntry]
     candidate_policy: str = DEFAULT_CANDIDATE_POLICY
     alignment_policy: str = DEFAULT_ALIGNMENT_POLICY
+    char_ngram_grid: tuple[CharNgramGridEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -381,6 +392,40 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
 
         bm25_grid.append(Bm25GridEntry(k1=k1, b=b))
 
+    char_ngram_grid: list[CharNgramGridEntry] = []
+    raw_char_grid = experiments.get("char_ngram_grid", [])
+    if not isinstance(raw_char_grid, list):
+        raise ValueError("experiments.char_ngram_grid must be a list when provided.")
+    for index, raw_entry in enumerate(raw_char_grid):
+        field = f"experiments.char_ngram_grid[{index}]"
+        entry = _ensure_mapping(raw_entry, field)
+        analyzer = entry.get("analyzer", "char_wb")
+        if analyzer not in ("char_wb", "char"):
+            raise ValueError(f"{field}.analyzer must be 'char_wb' or 'char'.")
+        raw_range = entry.get("ngram_range")
+        if (
+            not isinstance(raw_range, list)
+            or len(raw_range) != 2
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in raw_range)
+            or raw_range[0] < 1
+            or raw_range[0] > raw_range[1]
+        ):
+            raise ValueError(f"{field}.ngram_range must be [min, max] with 1 <= min <= max.")
+        min_df = entry.get("min_df", 1)
+        if not isinstance(min_df, int) or isinstance(min_df, bool) or min_df < 1:
+            raise ValueError(f"{field}.min_df must be an integer >= 1.")
+        sublinear_tf = entry.get("sublinear_tf", False)
+        if not isinstance(sublinear_tf, bool):
+            raise ValueError(f"{field}.sublinear_tf must be a boolean.")
+        char_ngram_grid.append(
+            CharNgramGridEntry(
+                analyzer=analyzer,
+                ngram_range=(raw_range[0], raw_range[1]),
+                min_df=min_df,
+                sublinear_tf=sublinear_tf,
+            )
+        )
+
     candidate_policy = experiments.get("candidate_policy", DEFAULT_CANDIDATE_POLICY)
     if candidate_policy not in CANDIDATE_POLICIES:
         raise ValueError(
@@ -407,6 +452,7 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
         bm25_grid=bm25_grid,
         candidate_policy=candidate_policy,
         alignment_policy=alignment_policy,
+        char_ngram_grid=tuple(char_ngram_grid),
     )
 
 

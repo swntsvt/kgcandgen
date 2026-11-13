@@ -256,6 +256,7 @@ heldout:
                         "rank_cutoff",
                         "candidate_policy",
                         "alignment_policy",
+                    "zero_candidate_query_share",
                     ],
                 )
                 rows = list(reader)
@@ -285,6 +286,42 @@ heldout:
         expected = sum(int(row["gold_count"]) for row in results)
         self.assertEqual(len(query_rows), expected)
         self.assertTrue(all(row["entity_type"] == "class" for row in query_rows))
+
+    def test_char_ngram_grid_adds_sensitivity_rows_and_errors_csv(self) -> None:
+        experiments = """
+experiments:
+  evaluation_ks: [1, 2]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+  bm25_grid:
+    - k1: 1.2
+      b: 0.75
+  char_ngram_grid:
+    - analyzer: char_wb
+      ngram_range: [2, 4]
+    - analyzer: char
+      ngram_range: [3, 3]
+      min_df: 1
+      sublinear_tf: true
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_fixture_dataset(Path(tmpdir), experiments_yaml=experiments)
+            output_csv_path = Path(tmpdir) / "results" / "experiment_results.csv"
+            results = run_experiments(config_path=config_path, output_csv_path=output_csv_path)
+            errors_csv = output_csv_path.with_name("experiment_results_errors.csv")
+            self.assertTrue(errors_csv.exists())
+            with errors_csv.open(encoding="utf-8", newline="") as handle:
+                self.assertEqual(list(csv.DictReader(handle)), [])
+
+        models = [row["model"] for row in results]
+        self.assertEqual(models.count("char_ngram"), 1)
+        self.assertEqual(models.count("char_ngram_sensitivity"), 2)
+        sensitivity = [row for row in results if row["model"] == "char_ngram_sensitivity"]
+        self.assertEqual(sensitivity[1]["hyperparameters"]["analyzer"], "char")
+        self.assertTrue(all(0.0 <= row["zero_candidate_query_share"] <= 1.0 for row in results))
 
     def test_runner_uses_yaml_defined_ks_and_grid_order(self) -> None:
         custom_experiments = """
@@ -343,6 +380,7 @@ experiments:
                 "rank_cutoff",
                 "candidate_policy",
                 "alignment_policy",
+            "zero_candidate_query_share",
             ],
         )
         self.assertTrue(all(row["rank_cutoff"] == "4" for row in rows))

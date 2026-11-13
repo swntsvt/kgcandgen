@@ -545,6 +545,28 @@ def _run_dataset_accounting_cli(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_grid_diagnostics_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--results-csv", required=True, help="Development results CSV.")
+    parser.add_argument(
+        "--errors-csv", default=None, help="Defaults to <results stem>_errors.csv next to it."
+    )
+    parser.add_argument("--output-csv", default=None)
+    parser.add_argument("--feature-loss-threshold", type=float, default=0.05)
+
+
+def _run_grid_diagnostics_cli(args: argparse.Namespace) -> int:
+    from src.analysis.grid_diagnostics import run_grid_diagnostics
+
+    output = run_grid_diagnostics(
+        args.results_csv,
+        errors_csv=args.errors_csv,
+        output_csv=args.output_csv,
+        feature_loss_threshold=args.feature_loss_threshold,
+    )
+    print(f"Grid diagnostics CSV: {output}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -637,6 +659,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write entity counts, gold pairs, exclusions and label statistics per dataset.",
     )
     _build_dataset_accounting_parser(accounting_parser)
+
+    grid_diagnostics_parser = subparsers.add_parser(
+        "grid-diagnostics",
+        help="Classify grid configurations as valid, reduced-scoring, feature-losing or failed.",
+    )
+    _build_grid_diagnostics_parser(grid_diagnostics_parser)
 
     return parser
 
@@ -1413,6 +1441,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "grid-diagnostics":
+            return _run_grid_diagnostics_cli(args)
         if args.command == "dataset-accounting":
             return _run_dataset_accounting_cli(args)
         if args.command == "efficiency-benchmark":

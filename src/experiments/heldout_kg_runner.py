@@ -75,6 +75,7 @@ TRAILING_CSV_COLUMNS: tuple[str, ...] = (
     "rank_cutoff",
     "candidate_policy",
     "alignment_policy",
+    "zero_candidate_query_share",
 )
 
 # Re-exported for callers that imported these from this module.
@@ -108,6 +109,7 @@ class HeldoutKgResultRecord(TypedDict):
     rank_cutoff: int
     candidate_policy: str
     alignment_policy: str
+    zero_candidate_query_share: float
 
 
 @dataclass(frozen=True)
@@ -371,6 +373,7 @@ def _persist_results_to_csv(
                 "rank_cutoff": record["rank_cutoff"],
                 "candidate_policy": record["candidate_policy"],
                 "alignment_policy": record["alignment_policy"],
+                "zero_candidate_query_share": record["zero_candidate_query_share"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
@@ -578,6 +581,10 @@ def run_heldout_kg_experiments(
                         rank_cutoff=k_max,
                         candidate_policy=candidate_policy,
                         alignment_policy=alignment_policy,
+                        zero_candidate_query_share=sum(
+                            1 for source in eval_sources if not predictions.get(source)
+                        )
+                        / len(eval_sources),
                     )
                 )
                 logger.info(

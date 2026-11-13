@@ -319,6 +319,28 @@ heldout:
                 with self.assertRaisesRegex(ValueError, f"experiments.{field}"):
                     load_runtime_config(config_path)
 
+    def test_char_ngram_grid_is_optional_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = load_runtime_config(self._write_valid_config(Path(tmpdir)))
+        self.assertEqual(runtime.experiments.char_ngram_grid, ())
+
+        bad_entries = (
+            "  char_ngram_grid:\n    - analyzer: word\n      ngram_range: [3, 5]\n",
+            "  char_ngram_grid:\n    - ngram_range: [5, 3]\n",
+            "  char_ngram_grid:\n    - ngram_range: [3, 5]\n      min_df: 0\n",
+        )
+        for block in bad_entries:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace(
+                        "experiments:\n", "experiments:\n" + block, 1
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "char_ngram_grid"):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))

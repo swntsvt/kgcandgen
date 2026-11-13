@@ -270,6 +270,7 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "rank_cutoff",
                         "candidate_policy",
                         "alignment_policy",
+                    "zero_candidate_query_share",
                     ],
                 )
                 rows = list(reader)

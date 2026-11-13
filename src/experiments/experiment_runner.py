@@ -14,7 +14,12 @@ from typing import Protocol, TypedDict, cast
 from pyoxigraph import NamedNode, RdfFormat, Store
 from tqdm import tqdm
 
-from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
+from src.config_loader import (
+    Bm25GridEntry,
+    CharNgramGridEntry,
+    TfidfGridEntry,
+    load_runtime_config,
+)
 from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
 from src.experiments.query_records import (
     QueryRecord,
@@ -61,7 +66,10 @@ TRAILING_CSV_COLUMNS: tuple[str, ...] = (
     "rank_cutoff",
     "candidate_policy",
     "alignment_policy",
+    "zero_candidate_query_share",
 )
+CHAR_NGRAM_SENSITIVITY_METHOD = "char_ngram_sensitivity"
+ERROR_CSV_COLUMNS: tuple[str, ...] = ("scope", "dataset", "method", "hyperparameters", "error")
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +102,7 @@ class ExperimentResultRecord(TypedDict):
     rank_cutoff: int
     candidate_policy: str
     alignment_policy: str
+    zero_candidate_query_share: float
 
 
 class ExperimentErrorRecord(TypedDict):
@@ -186,11 +195,32 @@ def _persist_results_to_csv(
                 "rank_cutoff": record["rank_cutoff"],
                 "candidate_policy": record["candidate_policy"],
                 "alignment_policy": record["alignment_policy"],
+                "zero_candidate_query_share": record["zero_candidate_query_share"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
                 row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
+
+
+def _persist_errors_to_csv(errors: list[ExperimentErrorRecord], output_csv_path: Path) -> None:
+    """Write every failed dataset or model run, so failed grid cells are explicit."""
+    output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_csv_path.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=list(ERROR_CSV_COLUMNS))
+        writer.writeheader()
+        for record in errors:
+            writer.writerow(
+                {
+                    "scope": record["scope"],
+                    "dataset": record["dataset_name"],
+                    "method": record["model"],
+                    "hyperparameters": json.dumps(
+                        record["hyperparameters"], sort_keys=True, separators=(",", ":")
+                    ),
+                    "error": record["error"],
+                }
+            )
 
 
 def _get_git_short_sha() -> str:
@@ -249,10 +279,33 @@ def _build_char_ngram_model_run(candidate_policy: str = "nonzero") -> ModelRunSp
     )
 
 
+def _build_char_ngram_sensitivity_run(
+    params: CharNgramGridEntry, candidate_policy: str = "nonzero"
+) -> ModelRunSpec:
+    return ModelRunSpec(
+        model_name=CHAR_NGRAM_SENSITIVITY_METHOD,
+        hyperparameters={
+            "normalization": fixed_method_hyperparameters("char_ngram")["normalization"],
+            "analyzer": params.analyzer,
+            "ngram_range": list(params.ngram_range),
+            "min_df": params.min_df,
+            "sublinear_tf": params.sublinear_tf,
+        },
+        retriever=CharNgramRetriever(
+            analyzer=params.analyzer,  # type: ignore[arg-type]
+            ngram_range=params.ngram_range,
+            min_df=params.min_df,
+            sublinear_tf=params.sublinear_tf,
+            candidate_policy=candidate_policy,  # type: ignore[arg-type]
+        ),
+    )
+
+
 def _build_model_runs(
     tfidf_grid: list[TfidfGridEntry],
     bm25_grid: list[Bm25GridEntry],
     candidate_policy: str = "nonzero",
+    char_ngram_grid: tuple[CharNgramGridEntry, ...] = (),
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
     for method_name in development_method_names():
@@ -271,6 +324,10 @@ def _build_model_runs(
             model_runs.append(_build_char_ngram_model_run(candidate_policy))
             continue
         raise ValueError(f"Unsupported registered development method: {method_name}")
+    # Sensitivity rows use their own method name so the zero-configuration char_ngram
+    # default stays a single row per dataset in every downstream analysis.
+    for params in char_ngram_grid:
+        model_runs.append(_build_char_ngram_sensitivity_run(params, candidate_policy))
     return model_runs
 
 
@@ -301,6 +358,7 @@ def run_experiments(
         runtime_config.experiments.tfidf_grid,
         runtime_config.experiments.bm25_grid,
         candidate_policy,
+        runtime_config.experiments.char_ngram_grid,
     )
 
     logger.info(
@@ -437,7 +495,7 @@ def run_experiments(
                     elif run.model_name == "exact_match":
                         exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
                         exact_match_retriever.fit(target_entities, target_labels)
-                    elif run.model_name == "char_ngram":
+                    elif run.model_name in ("char_ngram", CHAR_NGRAM_SENSITIVITY_METHOD):
                         char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
                         char_ngram_retriever.fit(target_entities, target_labels)
                     else:
@@ -504,6 +562,10 @@ def run_experiments(
                         "rank_cutoff": k_max,
                         "candidate_policy": candidate_policy,
                         "alignment_policy": alignment_policy,
+                        "zero_candidate_query_share": sum(
+                            1 for source in eval_sources if not predictions.get(source)
+                        )
+                        / len(eval_sources),
                     }
                     results.append(result_record)
                     query_results.extend(
@@ -597,6 +659,14 @@ def run_experiments(
             "Failed to persist result records to CSV at %s; returning in-memory results",
             resolved_output_csv_path,
         )
+
+    errors_csv_path = resolved_output_csv_path.with_name(
+        f"{resolved_output_csv_path.stem}_errors.csv"
+    )
+    try:
+        _persist_errors_to_csv(errors, errors_csv_path)
+    except OSError:
+        logger.exception("Failed to persist error records to %s", errors_csv_path)
 
     if errors:
         logger.warning("Experiment run completed with %d error record(s)", len(errors))

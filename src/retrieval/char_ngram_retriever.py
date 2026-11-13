@@ -26,11 +26,15 @@ class CharNgramRetriever:
         analyzer: CharAnalyzer = "char_wb",
         ngram_range: tuple[int, int] = (3, 5),
         candidate_policy: CandidatePolicy = DEFAULT_CANDIDATE_POLICY,
+        min_df: int | float = 1,
+        sublinear_tf: bool = False,
     ) -> None:
         self._candidate_policy = validate_candidate_policy(candidate_policy)
         self._vectorizer = TfidfVectorizer(
             analyzer=analyzer,
             ngram_range=ngram_range,
+            min_df=min_df,
+            sublinear_tf=sublinear_tf,
         )
         self._entity_ids: list[str] = []
         self._matrix = None
