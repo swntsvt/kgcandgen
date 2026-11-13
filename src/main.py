@@ -472,6 +472,58 @@ def _build_full_run_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_efficiency_benchmark_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config-path", default="config/runtime.yaml")
+    parser.add_argument("--selected-settings-json", default=None, help=_ADVANCED_HELP)
+    parser.add_argument(
+        "--tiers",
+        nargs="+",
+        default=["development", "kg", "class"],
+        choices=["development", "kg", "class"],
+    )
+    parser.add_argument("--datasets", nargs="+", default=None, help="Dataset names to include.")
+    parser.add_argument(
+        "--entity-types",
+        nargs="+",
+        default=["class", "predicate", "instance"],
+        choices=["class", "predicate", "instance"],
+        help="KG entity types to include (development and class tiers are class-only).",
+    )
+    parser.add_argument("--methods", nargs="+", default=None, help="Methods to include.")
+    parser.add_argument("--warmup", type=int, default=20, help="Untimed warm-up queries.")
+    parser.add_argument("--repeats", type=int, default=3, help="Timed passes over the queries.")
+    parser.add_argument("--max-queries", type=int, default=None, help="Seeded query sample size.")
+    parser.add_argument(
+        "--target-limit",
+        type=int,
+        default=None,
+        help="Seeded target-pool subsample size (gold targets always kept), for scaling curves.",
+    )
+    parser.add_argument("--seed", type=int, default=13)
+    parser.add_argument("--output-csv-path", default=None)
+
+
+def _run_efficiency_benchmark_cli(args: argparse.Namespace) -> int:
+    from src.experiments.efficiency_benchmark import run_efficiency_benchmark
+
+    rows = run_efficiency_benchmark(
+        config_path=args.config_path,
+        selected_settings_path=args.selected_settings_json,
+        tiers=args.tiers,
+        datasets=args.datasets,
+        entity_types=args.entity_types,
+        methods=args.methods,
+        warmup=args.warmup,
+        repeats=args.repeats,
+        max_queries=args.max_queries,
+        target_limit=args.target_limit,
+        seed=args.seed,
+        output_csv_path=args.output_csv_path,
+    )
+    print(f"Efficiency rows written: {len(rows)}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -552,6 +604,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Run experiments and generate all analysis reports in one command.",
     )
     _build_full_run_parser(full_run_parser)
+
+    efficiency_parser = subparsers.add_parser(
+        "efficiency-benchmark",
+        help="Measure build time, query latency, peak RSS and index size per method.",
+    )
+    _build_efficiency_benchmark_parser(efficiency_parser)
 
     return parser
 
@@ -1328,6 +1386,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "efficiency-benchmark":
+            return _run_efficiency_benchmark_cli(args)
         return _run_experiment_cli(args)
     except Exception as exc:
         logger.exception(
