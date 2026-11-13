@@ -17,6 +17,7 @@ from tqdm import tqdm
 from src.config_loader import (
     Bm25GridEntry,
     CharNgramGridEntry,
+    DenseModelEntry,
     TfidfGridEntry,
     load_runtime_config,
 )
@@ -301,11 +302,29 @@ def _build_char_ngram_sensitivity_run(
     )
 
 
+def _build_dense_model_run(entry: DenseModelEntry, candidate_policy: str = "nonzero") -> ModelRunSpec:
+    # Imported lazily so lexical-only runs never load torch.
+    from src.retrieval.dense_retriever import DenseRetriever
+
+    return ModelRunSpec(
+        model_name=entry.name,
+        hyperparameters=entry.hyperparameters(),
+        retriever=DenseRetriever(
+            model_name=entry.model,
+            revision=entry.revision,
+            device=entry.device,
+            batch_size=entry.batch_size,
+            candidate_policy=candidate_policy,  # type: ignore[arg-type]
+        ),
+    )
+
+
 def _build_model_runs(
     tfidf_grid: list[TfidfGridEntry],
     bm25_grid: list[Bm25GridEntry],
     candidate_policy: str = "nonzero",
     char_ngram_grid: tuple[CharNgramGridEntry, ...] = (),
+    dense_models: tuple[DenseModelEntry, ...] | list[DenseModelEntry] = (),
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
     for method_name in development_method_names():
@@ -328,6 +347,8 @@ def _build_model_runs(
     # default stays a single row per dataset in every downstream analysis.
     for params in char_ngram_grid:
         model_runs.append(_build_char_ngram_sensitivity_run(params, candidate_policy))
+    for entry in dense_models:
+        model_runs.append(_build_dense_model_run(entry, candidate_policy))
     return model_runs
 
 
@@ -359,6 +380,7 @@ def run_experiments(
         runtime_config.experiments.bm25_grid,
         candidate_policy,
         runtime_config.experiments.char_ngram_grid,
+        runtime_config.experiments.dense_models_for("development"),
     )
 
     logger.info(
@@ -498,6 +520,8 @@ def run_experiments(
                     elif run.model_name in ("char_ngram", CHAR_NGRAM_SENSITIVITY_METHOD):
                         char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
                         char_ngram_retriever.fit(target_entities, target_labels)
+                    elif run.model_name.startswith("dense_"):
+                        run.retriever.fit(target_entities, target_labels)
                     else:
                         raise ValueError(f"Unsupported model type: {run.model_name}")
 
@@ -508,27 +532,34 @@ def run_experiments(
                         disable=not progress_enabled,
                         leave=False,
                     )
-                    for source_id in source_iterator:
-                        if run.model_name == "tfidf":
-                            tfidf_retriever = cast(TfidfRetriever, run.retriever)
-                            predictions[source_id] = tfidf_retriever.retrieve_preprocessed(
-                                source_label_preprocessed_map[source_id], k=k_max
-                            )
-                        elif run.model_name == "bm25":
-                            bm25_retriever = cast(Bm25Retriever, run.retriever)
-                            predictions[source_id] = bm25_retriever.retrieve_tokenized(
-                                source_token_map[source_id], k=k_max
-                            )
-                        elif run.model_name == "exact_match":
-                            exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
-                            predictions[source_id] = exact_match_retriever.retrieve(
-                                source_label_map[source_id], k=k_max
-                            )
-                        else:
-                            char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
-                            predictions[source_id] = char_ngram_retriever.retrieve(
-                                source_label_map[source_id], k=k_max
-                            )
+                    if run.model_name.startswith("dense_"):
+                        # Batch-encode all queries; ranking is identical to per-query calls.
+                        ranked_lists = run.retriever.retrieve_many(  # type: ignore[attr-defined]
+                            [source_label_map[source_id] for source_id in eval_sources], k=k_max
+                        )
+                        predictions = dict(zip(eval_sources, ranked_lists, strict=True))
+                    else:
+                        for source_id in source_iterator:
+                            if run.model_name == "tfidf":
+                                tfidf_retriever = cast(TfidfRetriever, run.retriever)
+                                predictions[source_id] = tfidf_retriever.retrieve_preprocessed(
+                                    source_label_preprocessed_map[source_id], k=k_max
+                                )
+                            elif run.model_name == "bm25":
+                                bm25_retriever = cast(Bm25Retriever, run.retriever)
+                                predictions[source_id] = bm25_retriever.retrieve_tokenized(
+                                    source_token_map[source_id], k=k_max
+                                )
+                            elif run.model_name == "exact_match":
+                                exact_match_retriever = cast(ExactMatchRetriever, run.retriever)
+                                predictions[source_id] = exact_match_retriever.retrieve(
+                                    source_label_map[source_id], k=k_max
+                                )
+                            else:
+                                char_ngram_retriever = cast(CharNgramRetriever, run.retriever)
+                                predictions[source_id] = char_ngram_retriever.retrieve(
+                                    source_label_map[source_id], k=k_max
+                                )
 
                     metrics = compute_retrieval_metrics(
                         predictions, gold_filtered, evaluation_ks

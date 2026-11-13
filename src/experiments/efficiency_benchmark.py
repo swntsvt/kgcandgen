@@ -108,6 +108,7 @@ class BenchmarkInputs:
 class MethodSpec:
     method: str
     hyperparameters: dict[str, object]
+    runtime_options: dict[str, object] | None = None
 
 
 def _max_rss_mb() -> float:
@@ -116,8 +117,24 @@ def _max_rss_mb() -> float:
     return peak / (1024 * 1024) if sys.platform == "darwin" else peak / 1024
 
 
-def make_retriever(method: str, hyperparameters: dict[str, object], candidate_policy: str):
+def make_retriever(
+    method: str,
+    hyperparameters: dict[str, object],
+    candidate_policy: str,
+    runtime_options: dict[str, object] | None = None,
+):
     """Construct an unfitted retriever exposing ``fit(ids, labels)`` and ``retrieve(text, k)``."""
+    if method.startswith("dense_"):
+        from src.retrieval.dense_retriever import DenseRetriever
+
+        options = runtime_options or {}
+        return DenseRetriever(
+            model_name=str(hyperparameters["model"]),
+            revision=str(hyperparameters["revision"]),
+            device=str(options.get("device", "cpu")),
+            batch_size=int(options.get("batch_size", 256)),  # type: ignore[arg-type]
+            candidate_policy=candidate_policy,  # type: ignore[arg-type]
+        )
     if method == "tfidf":
         from src.retrieval.tfidf_retriever import TfidfRetriever
 
@@ -164,14 +181,28 @@ def measure_method(
     k: int,
     warmup: int,
     repeats: int,
+    runtime_options: dict[str, object] | None = None,
 ) -> dict[str, float]:
-    """Fit and time one method in the current process. Run it in a fresh process for RSS."""
+    """Fit and time one method in the current process. Run it in a fresh process for RSS.
+
+    For dense methods the model is loaded before timing starts, so ``build_seconds`` is
+    the encoding of the target labels and the RSS baseline includes the model weights.
+    """
     if repeats <= 0:
         raise ValueError("repeats must be positive.")
     if not query_labels:
         raise ValueError("query_labels must not be empty.")
+    if method.startswith("dense_"):
+        from src.retrieval.dense_retriever import _load_model
+
+        options = runtime_options or {}
+        _load_model(
+            str(hyperparameters["model"]),
+            str(hyperparameters["revision"]),
+            str(options.get("device", "cpu")),
+        )
     rss_before_fit = _max_rss_mb()
-    retriever = make_retriever(method, hyperparameters, candidate_policy)
+    retriever = make_retriever(method, hyperparameters, candidate_policy, runtime_options)
 
     start = time.perf_counter()
     retriever.fit(target_ids, target_labels)
@@ -391,7 +422,19 @@ def run_efficiency_benchmark(
                 max_queries=max_queries,
                 seed=seed,
             ):
-                for spec in specs:
+                tier_specs = [
+                    *specs,
+                    *(
+                        MethodSpec(
+                            entry.name,
+                            entry.hyperparameters(),
+                            {"device": entry.device, "batch_size": entry.batch_size},
+                        )
+                        for entry in runtime.experiments.dense_models_for(tier)
+                        if methods is None or entry.name in set(methods)
+                    ),
+                ]
+                for spec in tier_specs:
                     logger.info(
                         "Benchmarking %s/%s/%s method=%s targets=%d queries=%d",
                         tier,
@@ -411,6 +454,7 @@ def run_efficiency_benchmark(
                         k=k_value,
                         warmup=warmup,
                         repeats=repeats,
+                        runtime_options=spec.runtime_options,
                     )
                     rows.append(
                         {

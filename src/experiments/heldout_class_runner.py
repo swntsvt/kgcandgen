@@ -14,7 +14,7 @@ from typing import TypedDict, cast
 from pyoxigraph import NamedNode
 from tqdm import tqdm
 
-from src.config_loader import load_runtime_config
+from src.config_loader import DenseModelEntry, load_runtime_config
 from src.evaluation.metrics import (
     compute_retrieval_metrics,
     mean_candidate_count,
@@ -267,7 +267,25 @@ def _predict_for_method(
     eval_sources: list[str],
     k_max: int,
     candidate_policy: str = "nonzero",
+    dense_models: dict[str, DenseModelEntry] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
+    if dense_models and method_name in dense_models:
+        from src.retrieval.dense_retriever import DenseRetriever
+
+        entry = dense_models[method_name]
+        dense = DenseRetriever(
+            model_name=entry.model,
+            revision=entry.revision,
+            device=entry.device,
+            batch_size=entry.batch_size,
+            candidate_policy=candidate_policy,  # type: ignore[arg-type]
+        )
+        dense.fit(target_entities, target_labels)
+        ranked_lists = dense.retrieve_many(
+            [source_label_map[source_id] for source_id in eval_sources], k=k_max
+        )
+        return dict(zip(eval_sources, ranked_lists, strict=True))
+
     if method_name == "tfidf":
         retriever = TfidfRetriever(
             ngram_range=_coerce_tfidf_ngram_range(hyperparameters["ngram_range"]),
@@ -425,6 +443,12 @@ def run_heldout_class_experiments(
         selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
         frozen_settings = _load_selected_settings(selected_settings_json)
         method_runs = _build_heldout_method_runs(frozen_settings)
+    dense_entries = runtime_config.experiments.dense_models_for("class")
+    dense_models = {entry.name: entry for entry in dense_entries}
+    method_runs = [
+        *method_runs,
+        *(HeldoutMethodRunSpec(entry.name, entry.hyperparameters()) for entry in dense_entries),
+    ]
     datasets = runtime_config.heldout_secondary_datasets
     if not datasets:
         raise HeldoutClassRunnerValidationError(
@@ -495,6 +519,7 @@ def run_heldout_class_experiments(
                 eval_sources=eval_sources,
                 k_max=k_max,
                 candidate_policy=candidate_policy,
+                dense_models=dense_models,
             )
             metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
             recalls = {k: metrics.recalls[k] for k in evaluation_ks}

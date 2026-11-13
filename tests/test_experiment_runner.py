@@ -323,6 +323,41 @@ experiments:
         self.assertEqual(sensitivity[1]["hyperparameters"]["analyzer"], "char")
         self.assertTrue(all(0.0 <= row["zero_candidate_query_share"] <= 1.0 for row in results))
 
+    def test_dense_models_run_on_development_tier(self) -> None:
+        from tests.test_dense_retriever import _StubModel
+
+        experiments = """
+experiments:
+  evaluation_ks: [1, 2]
+  tfidf_grid:
+    - ngram_range: [1, 1]
+      min_df: 1
+      max_df: 1.0
+      sublinear_tf: false
+  bm25_grid:
+    - k1: 1.2
+      b: 0.75
+  dense_models:
+    - name: dense_stub
+      model: stub
+      revision: r1
+    - name: dense_class_only
+      model: stub
+      revision: r1
+      tiers: [class]
+"""
+        with tempfile.TemporaryDirectory() as tmpdir, patch(
+            "src.retrieval.dense_retriever._load_model", return_value=_StubModel()
+        ):
+            config_path = self._write_fixture_dataset(Path(tmpdir), experiments_yaml=experiments)
+            results = run_experiments(
+                config_path=config_path, output_csv_path=Path(tmpdir) / "results" / "r.csv"
+            )
+
+        dense_rows = [row for row in results if row["model"].startswith("dense_")]
+        self.assertEqual([row["model"] for row in dense_rows], ["dense_stub"])
+        self.assertEqual(dense_rows[0]["hyperparameters"]["revision"], "r1")
+
     def test_runner_uses_yaml_defined_ks_and_grid_order(self) -> None:
         custom_experiments = """
 experiments:

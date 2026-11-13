@@ -8,7 +8,7 @@
 # Grids: the complete 5 x 2 x 2 TF-IDF grid (20 cells; the [2,2] and [2,3] min_df=2 cells
 # fail on two Conference pairs with an empty vocabulary, recorded in the *_errors.csv),
 # the 5 x 4 BM25 grid, and a 24-cell character n-gram sensitivity grid that is reported
-# separately and never used for selection.
+# separately and never used for selection. Dense baselines are listed under dense_models.
 data_root: ../data/oaei_track_cache
 experiments:
   evaluation_ks: [1, 5, 10, 20, 50]
@@ -213,6 +213,21 @@ experiments:
     ngram_range: [4, 4]
     min_df: 2
     sublinear_tf: false
+  # Dense baselines: fixed, pinned sentence-transformer models with exact cosine search
+  # (never tuned or used for selection). MiniLM runs on every tier; BioLORD-2023 on Bio-ML.
+  dense_models:
+  - name: dense_minilm
+    model: sentence-transformers/all-MiniLM-L6-v2
+    revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+    tiers: [development, kg, class]
+    device: cpu
+    batch_size: 256
+  - name: dense_biolord
+    model: FremyCompany/BioLORD-2023
+    revision: 167aab527b238a50ca65224e6319215d2ff4fc9f
+    tiers: [class]
+    device: cpu
+    batch_size: 256
 development_datasets:
   flopo-pto: {track: biodiv, version: '2018', source_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/source.rdf,
     target_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/target.rdf, alignment_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/reference.rdf}

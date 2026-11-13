@@ -359,6 +359,38 @@ heldout:
                 with self.assertRaises(FileNotFoundError):
                     load_runtime_config(config_path)
 
+    def test_dense_models_are_validated_and_filtered_by_tier(self) -> None:
+        good = (
+            "  dense_models:\n"
+            "    - name: dense_minilm\n      model: m\n      revision: abc\n"
+            "    - name: dense_bio\n      model: b\n      revision: def\n      tiers: [class]\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + good, 1),
+                encoding="utf-8",
+            )
+            experiments = load_runtime_config(config_path).experiments
+        self.assertEqual([e.name for e in experiments.dense_models_for("class")], ["dense_minilm", "dense_bio"])
+        self.assertEqual([e.name for e in experiments.dense_models_for("kg")], ["dense_minilm"])
+        self.assertNotIn("device", experiments.dense_models[0].hyperparameters())
+
+        bad_blocks = (
+            "  dense_models:\n    - name: minilm\n      model: m\n      revision: abc\n",
+            "  dense_models:\n    - name: dense_x\n      model: m\n",
+            "  dense_models:\n    - name: dense_x\n      model: m\n      revision: a\n      tiers: [web]\n",
+        )
+        for block in bad_blocks:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + block, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "dense_models"):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))

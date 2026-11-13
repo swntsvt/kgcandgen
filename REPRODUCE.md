@@ -16,6 +16,14 @@ python3.12 -m venv venv
 macOS (Apple M4 Pro, 64 GB RAM). NLTK tokenizer and stopword data are bundled in
 `resources/nltk_data`, so nothing is downloaded at run time.
 
+### Dense models
+
+The dense baselines download two pinned Hugging Face models on first use (about 90 MB and
+400 MB): `sentence-transformers/all-MiniLM-L6-v2` at revision `1110a243…` and
+`FremyCompany/BioLORD-2023` at revision `167aab52…` (full hashes in
+`config/runtime.paper.yaml`). After the first run, set `HF_HUB_OFFLINE=1` to guarantee that
+the cached revisions are used. Encoding runs on CPU (`device: cpu`) for determinism.
+
 ## 2. Benchmark data
 
 The 34 alignment pairs (24 development, 5 OAEI Knowledge Graph, 5 OAEI Bio-ML) use 100

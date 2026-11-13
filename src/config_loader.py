@@ -74,6 +74,30 @@ class CharNgramGridEntry:
     sublinear_tf: bool
 
 
+DENSE_TIERS: tuple[str, ...] = ("development", "kg", "class")
+
+
+@dataclass(frozen=True)
+class DenseModelEntry:
+    """A pinned sentence-transformer baseline, applied with fixed settings (never tuned)."""
+
+    name: str
+    model: str
+    revision: str
+    tiers: tuple[str, ...]
+    device: str = "cpu"
+    batch_size: int = 256
+
+    def hyperparameters(self) -> dict[str, object]:
+        # Device and batch size are runtime knobs, not part of the method's identity.
+        return {
+            "model": self.model,
+            "revision": self.revision,
+            "normalization": "light_v1",
+            "similarity": "cosine_exact",
+        }
+
+
 @dataclass(frozen=True)
 class ExperimentConfig:
     """Validated experiment runtime configuration."""
@@ -84,6 +108,10 @@ class ExperimentConfig:
     candidate_policy: str = DEFAULT_CANDIDATE_POLICY
     alignment_policy: str = DEFAULT_ALIGNMENT_POLICY
     char_ngram_grid: tuple[CharNgramGridEntry, ...] = ()
+    dense_models: tuple[DenseModelEntry, ...] = ()
+
+    def dense_models_for(self, tier: str) -> list[DenseModelEntry]:
+        return [entry for entry in self.dense_models if tier in entry.tiers]
 
 
 @dataclass(frozen=True)
@@ -453,6 +481,38 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
             )
         )
 
+    dense_models: list[DenseModelEntry] = []
+    raw_dense = experiments.get("dense_models", [])
+    if not isinstance(raw_dense, list):
+        raise ValueError("experiments.dense_models must be a list when provided.")
+    for index, raw_entry in enumerate(raw_dense):
+        field = f"experiments.dense_models[{index}]"
+        entry = _ensure_mapping(raw_entry, field)
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.startswith("dense_"):
+            raise ValueError(f"{field}.name must be a string starting with 'dense_'.")
+        if any(existing.name == name for existing in dense_models):
+            raise ValueError(f"{field}.name '{name}' is duplicated.")
+        for key in ("model", "revision"):
+            if not isinstance(entry.get(key), str) or not entry.get(key):
+                raise ValueError(f"{field}.{key} must be a non-empty string (pin the revision).")
+        tiers = entry.get("tiers", list(DENSE_TIERS))
+        if not isinstance(tiers, list) or not tiers or any(t not in DENSE_TIERS for t in tiers):
+            raise ValueError(f"{field}.tiers must be a non-empty subset of {list(DENSE_TIERS)}.")
+        batch_size = entry.get("batch_size", 256)
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
+            raise ValueError(f"{field}.batch_size must be a positive integer.")
+        dense_models.append(
+            DenseModelEntry(
+                name=name,
+                model=entry["model"],
+                revision=entry["revision"],
+                tiers=tuple(tiers),
+                device=str(entry.get("device", "cpu")),
+                batch_size=batch_size,
+            )
+        )
+
     candidate_policy = experiments.get("candidate_policy", DEFAULT_CANDIDATE_POLICY)
     if candidate_policy not in CANDIDATE_POLICIES:
         raise ValueError(
@@ -480,6 +540,7 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
         candidate_policy=candidate_policy,
         alignment_policy=alignment_policy,
         char_ngram_grid=tuple(char_ngram_grid),
+        dense_models=tuple(dense_models),
     )
 
 

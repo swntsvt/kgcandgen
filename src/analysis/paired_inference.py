@@ -59,12 +59,14 @@ def filter_to_selected(
     queries: pd.DataFrame, selected_settings: dict[str, dict[str, object]] | None
 ) -> pd.DataFrame:
     """Keep frozen settings for tuned methods and the fixed baselines; drop sensitivity rows."""
-    keep = queries["method"].isin(FIXED_METHODS)
+    # Dense baselines are fixed (one pinned configuration each), like exact match and char n-gram.
+    fixed = queries["method"].isin(FIXED_METHODS) | queries["method"].str.startswith("dense_")
+    keep = fixed
     for method, settings in (selected_settings or {}).items():
         encoded = json.dumps(settings, sort_keys=True, separators=(",", ":"))
         keep |= (queries["method"] == method) & (queries["hyperparameters"] == encoded)
     if not selected_settings:
-        tuned = ~queries["method"].isin(FIXED_METHODS)
+        tuned = ~fixed
         counts = queries[tuned].groupby("method")["hyperparameters"].nunique()
         if (counts > 1).any():
             raise ValueError(
