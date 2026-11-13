@@ -4,7 +4,7 @@ from src.retrieval.tfidf_retriever import TfidfRetriever
 
 
 class TfidfRetrieverTests(unittest.TestCase):
-    def test_basic_top_k_retrieval(self) -> None:
+    def test_basic_top_k_retrieval_returns_only_nonzero_scores(self) -> None:
         retriever = TfidfRetriever()
         entity_ids = ["e1", "e2", "e3"]
         labels = ["red apple", "blue car", "green tree"]
@@ -12,9 +12,28 @@ class TfidfRetrieverTests(unittest.TestCase):
 
         results = retriever.retrieve("apple", k=2)
 
+        self.assertEqual([entity_id for entity_id, _score in results], ["e1"])
+        self.assertGreater(results[0][1], 0.0)
+
+    def test_padded_policy_fills_list_with_zero_score_targets(self) -> None:
+        retriever = TfidfRetriever(candidate_policy="padded")
+        retriever.fit(["e1", "e2", "e3"], ["red apple", "blue car", "green tree"])
+
+        results = retriever.retrieve("apple", k=2)
+
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0][0], "e1")
-        self.assertGreaterEqual(results[0][1], results[1][1])
+        self.assertEqual(results[1][1], 0.0)
+
+    def test_query_with_no_overlap_returns_no_candidates(self) -> None:
+        retriever = TfidfRetriever()
+        retriever.fit(["e1", "e2"], ["alpha", "beta"])
+
+        self.assertEqual(retriever.retrieve("gamma", k=5), [])
+
+    def test_invalid_candidate_policy_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            TfidfRetriever(candidate_policy="everything")
 
     def test_hyperparameters_are_propagated(self) -> None:
         retriever = TfidfRetriever(
@@ -27,8 +46,16 @@ class TfidfRetrieverTests(unittest.TestCase):
         self.assertEqual(params["max_df"], 0.95)
         self.assertTrue(params["sublinear_tf"])
 
-    def test_k_larger_than_index_size_returns_all(self) -> None:
+    def test_k_larger_than_index_size_returns_all_matches(self) -> None:
         retriever = TfidfRetriever()
+        retriever.fit(["e1", "e2", "e3"], ["alpha one", "alpha two", "beta"])
+
+        results = retriever.retrieve("alpha", k=10)
+
+        self.assertEqual(sorted(entity_id for entity_id, _score in results), ["e1", "e2"])
+
+    def test_padded_k_larger_than_index_size_returns_all(self) -> None:
+        retriever = TfidfRetriever(candidate_policy="padded")
         retriever.fit(["e1", "e2"], ["alpha", "beta"])
 
         results = retriever.retrieve("alpha", k=10)

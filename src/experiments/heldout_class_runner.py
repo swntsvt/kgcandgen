@@ -15,7 +15,10 @@ from pyoxigraph import NamedNode
 from tqdm import tqdm
 
 from src.config_loader import load_runtime_config
-from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.evaluation.metrics import (
+    compute_retrieval_metrics,
+    mean_candidate_count,
+)
 from src.experiments.experiment_runner import _load_store_with_fallback
 from src.method_registry import (
     fixed_method_hyperparameters,
@@ -24,7 +27,11 @@ from src.method_registry import (
     ordered_method_names,
 )
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    filter_alignment_targets,
+    load_alignment_targets,
+    multi_target_source_count,
+)
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
@@ -51,6 +58,18 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "mrr",
     "runtime_seconds",
 )
+# Appended after the submitted-version columns so existing readers keep working.
+EXTRA_CSV_COLUMNS: tuple[str, ...] = (
+    "query_count",
+    "multi_target_query_count",
+    "mean_candidate_count",
+)
+TRAILING_CSV_COLUMNS: tuple[str, ...] = (
+    "any_gold_mrr",
+    "rank_cutoff",
+    "candidate_policy",
+    "alignment_policy",
+)
 
 
 class HeldoutClassRunnerValidationError(ValueError):
@@ -71,6 +90,14 @@ class HeldoutClassResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+    query_count: int
+    multi_target_query_count: int
+    mean_candidate_count: float
+    any_gold_recalls: dict[int, float]
+    any_gold_mrr: float
+    rank_cutoff: int
+    candidate_policy: str
+    alignment_policy: str
 
 
 @dataclass(frozen=True)
@@ -204,6 +231,7 @@ def _predict_for_method(
     source_token_map: dict[str, list[str]],
     eval_sources: list[str],
     k_max: int,
+    candidate_policy: str = "nonzero",
 ) -> dict[str, list[tuple[str, float]]]:
     if method_name == "tfidf":
         retriever = TfidfRetriever(
@@ -211,6 +239,7 @@ def _predict_for_method(
             min_df=cast(int | float, hyperparameters["min_df"]),
             max_df=cast(int | float, hyperparameters["max_df"]),
             sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
         return {
@@ -225,6 +254,7 @@ def _predict_for_method(
         retriever = Bm25Retriever(
             k1=float(cast(int | float, hyperparameters["k1"])),
             b=float(cast(int | float, hyperparameters["b"])),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_tokenized(target_entities, target_tokens)
         return {
@@ -247,7 +277,7 @@ def _predict_for_method(
         }
 
     if method_name == "char_ngram":
-        retriever = CharNgramRetriever()
+        retriever = CharNgramRetriever(candidate_policy=candidate_policy)
         retriever.fit(target_entities, target_labels)
         return {
             source_id: retriever.retrieve(
@@ -285,6 +315,9 @@ def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
         *FIXED_CSV_COLUMNS[:10],
         *(f"recall_at_{k}" for k in evaluation_ks),
         *FIXED_CSV_COLUMNS[10:],
+        *EXTRA_CSV_COLUMNS,
+        *(f"any_gold_recall_at_{k}" for k in evaluation_ks),
+        *TRAILING_CSV_COLUMNS,
     ]
 
 
@@ -316,9 +349,17 @@ def _persist_results_to_csv(
                 "candidate_reduction_ratio": record["candidate_reduction_ratio"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
+                "query_count": record["query_count"],
+                "multi_target_query_count": record["multi_target_query_count"],
+                "mean_candidate_count": record["mean_candidate_count"],
+                "any_gold_mrr": record["any_gold_mrr"],
+                "rank_cutoff": record["rank_cutoff"],
+                "candidate_policy": record["candidate_policy"],
+                "alignment_policy": record["alignment_policy"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
+                row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
 
 
@@ -346,6 +387,8 @@ def run_heldout_class_experiments(
 
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
+    candidate_policy = runtime_config.experiments.candidate_policy
+    alignment_policy = runtime_config.experiments.alignment_policy
 
     results: list[HeldoutClassResultRecord] = []
     dataset_names = list(datasets.keys())
@@ -358,16 +401,12 @@ def run_heldout_class_experiments(
         dataset = datasets[dataset_name]
         source_store = _load_store_with_fallback(dataset.source_rdf)
         target_store = _load_store_with_fallback(dataset.target_rdf)
-        gold_raw = load_alignment_mappings(dataset.alignment_rdf)
+        gold_raw = load_alignment_targets(dataset.alignment_rdf, alignment_policy)
         source_entities = _extract_owl_class_entities(source_store)
         target_entities = _extract_owl_class_entities(target_store)
         class_source_set = set(source_entities)
         class_target_set = set(target_entities)
-        gold = {
-            source: target
-            for source, target in gold_raw.items()
-            if source in class_source_set and target in class_target_set
-        }
+        gold = filter_alignment_targets(gold_raw, class_source_set, class_target_set)
         if not target_entities:
             raise HeldoutClassRunnerValidationError(
                 f"Held-out secondary dataset '{dataset_name}' has zero class target entities."
@@ -390,7 +429,8 @@ def run_heldout_class_experiments(
 
         target_pool_size = len(target_entities)
         retained_candidate_size = min(k_max, target_pool_size)
-        candidate_reduction_ratio = 1.0 - (retained_candidate_size / target_pool_size)
+        gold_pairs = sum(len(targets) for targets in gold.values())
+        multi_target_query_count = multi_target_source_count(gold)
 
         for method_run in method_runs:
             run_start = time.perf_counter()
@@ -406,9 +446,14 @@ def run_heldout_class_experiments(
                 source_token_map=source_token_map,
                 eval_sources=eval_sources,
                 k_max=k_max,
+                candidate_policy=candidate_policy,
             )
-            raw_recalls, mrr = compute_recall_at_ks_and_mrr(predictions, gold, evaluation_ks)
-            recalls = {k: raw_recalls[k] for k in evaluation_ks}
+            metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
+            recalls = {k: metrics.recalls[k] for k in evaluation_ks}
+            mrr = metrics.mrr
+            mean_candidates = mean_candidate_count(predictions, eval_sources)
+            # Reduction is measured on the candidates actually returned, not min(k, |T|).
+            candidate_reduction_ratio = 1.0 - (mean_candidates / target_pool_size)
             results.append(
                 HeldoutClassResultRecord(
                     dataset_name=dataset.name,
@@ -417,13 +462,21 @@ def run_heldout_class_experiments(
                     entity_type="class",
                     model=method_run.method_name,
                     hyperparameters=method_run.hyperparameters,
-                    gold_count=len(gold),
+                    gold_count=gold_pairs,
                     target_pool_size=target_pool_size,
                     retained_candidate_size=retained_candidate_size,
                     candidate_reduction_ratio=candidate_reduction_ratio,
                     recalls=recalls,
                     mrr=mrr,
                     runtime_seconds=time.perf_counter() - run_start,
+                    query_count=metrics.query_count,
+                    multi_target_query_count=multi_target_query_count,
+                    mean_candidate_count=mean_candidates,
+                    any_gold_recalls={k: metrics.any_gold_recalls[k] for k in evaluation_ks},
+                    any_gold_mrr=metrics.any_gold_mrr,
+                    rank_cutoff=k_max,
+                    candidate_policy=candidate_policy,
+                    alignment_policy=alignment_policy,
                 )
             )
 

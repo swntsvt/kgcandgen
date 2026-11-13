@@ -9,6 +9,12 @@ from typing import Any
 
 import yaml
 
+from src.rdf_utils.alignment_parser import (
+    ALIGNMENT_POLICIES,
+    DEFAULT_ALIGNMENT_POLICY,
+)
+from src.retrieval.topk import CANDIDATE_POLICIES, DEFAULT_CANDIDATE_POLICY
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG_PATH = "config/runtime.yaml"
@@ -63,6 +69,8 @@ class ExperimentConfig:
     evaluation_ks: list[int]
     tfidf_grid: list[TfidfGridEntry]
     bm25_grid: list[Bm25GridEntry]
+    candidate_policy: str = DEFAULT_CANDIDATE_POLICY
+    alignment_policy: str = DEFAULT_ALIGNMENT_POLICY
 
 
 @dataclass(frozen=True)
@@ -373,16 +381,32 @@ def _validate_experiment_config(raw_experiments: Any) -> ExperimentConfig:
 
         bm25_grid.append(Bm25GridEntry(k1=k1, b=b))
 
+    candidate_policy = experiments.get("candidate_policy", DEFAULT_CANDIDATE_POLICY)
+    if candidate_policy not in CANDIDATE_POLICIES:
+        raise ValueError(
+            f"experiments.candidate_policy must be one of {list(CANDIDATE_POLICIES)}."
+        )
+    alignment_policy = experiments.get("alignment_policy", DEFAULT_ALIGNMENT_POLICY)
+    if alignment_policy not in ALIGNMENT_POLICIES:
+        raise ValueError(
+            f"experiments.alignment_policy must be one of {list(ALIGNMENT_POLICIES)}."
+        )
+
     logger.info(
-        "Validated experiment config (evaluation_ks=%s, tfidf_grid=%d, bm25_grid=%d)",
+        "Validated experiment config (evaluation_ks=%s, tfidf_grid=%d, bm25_grid=%d, "
+        "candidate_policy=%s, alignment_policy=%s)",
         evaluation_ks,
         len(tfidf_grid),
         len(bm25_grid),
+        candidate_policy,
+        alignment_policy,
     )
     return ExperimentConfig(
         evaluation_ks=evaluation_ks,
         tfidf_grid=tfidf_grid,
         bm25_grid=bm25_grid,
+        candidate_policy=candidate_policy,
+        alignment_policy=alignment_policy,
     )
 
 

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 from typing import Literal
 
 from src.preprocessing.exact_match_normalizer import normalize_exact_match_text
+from src.retrieval.topk import (
+    DEFAULT_CANDIDATE_POLICY,
+    CandidatePolicy,
+    top_k_indices,
+    validate_candidate_policy,
+)
 
 CharAnalyzer = Literal["word", "char", "char_wb"]
 
@@ -20,7 +25,9 @@ class CharNgramRetriever:
         *,
         analyzer: CharAnalyzer = "char_wb",
         ngram_range: tuple[int, int] = (3, 5),
+        candidate_policy: CandidatePolicy = DEFAULT_CANDIDATE_POLICY,
     ) -> None:
+        self._candidate_policy = validate_candidate_policy(candidate_policy)
         self._vectorizer = TfidfVectorizer(
             analyzer=analyzer,
             ngram_range=ngram_range,
@@ -54,6 +61,7 @@ class CharNgramRetriever:
         query_vector = self._vectorizer.transform([normalized_query])
         scores = linear_kernel(query_vector, self._matrix).ravel()
 
-        candidate_count = min(k, len(self._entity_ids))
-        order = np.lexsort((np.arange(len(scores)), -scores))[:candidate_count]
+        order = top_k_indices(
+            scores, k, require_positive=self._candidate_policy == "nonzero"
+        )
         return [(self._entity_ids[idx], float(scores[idx])) for idx in order]

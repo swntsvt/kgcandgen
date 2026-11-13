@@ -15,10 +15,14 @@ from pyoxigraph import NamedNode, RdfFormat, Store
 from tqdm import tqdm
 
 from src.config_loader import Bm25GridEntry, TfidfGridEntry, load_runtime_config
-from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
 from src.method_registry import development_method_names, fixed_method_hyperparameters
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    filter_alignment_targets,
+    load_alignment_targets,
+    multi_target_source_count,
+)
 from src.rdf_utils.label_extractor import extract_entity_label
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
@@ -39,6 +43,18 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "dataset_prep_seconds",
     "mrr",
     "runtime_seconds",
+)
+# Appended after the submitted-version columns so existing readers keep working.
+EXTRA_CSV_COLUMNS: tuple[str, ...] = (
+    "query_count",
+    "multi_target_query_count",
+    "mean_candidate_count",
+)
+TRAILING_CSV_COLUMNS: tuple[str, ...] = (
+    "any_gold_mrr",
+    "rank_cutoff",
+    "candidate_policy",
+    "alignment_policy",
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +80,14 @@ class ExperimentResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+    query_count: int
+    multi_target_query_count: int
+    mean_candidate_count: float
+    any_gold_recalls: dict[int, float]
+    any_gold_mrr: float
+    rank_cutoff: int
+    candidate_policy: str
+    alignment_policy: str
 
 
 class ExperimentErrorRecord(TypedDict):
@@ -119,6 +143,9 @@ def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
         *FIXED_CSV_COLUMNS[:8],
         *(f"recall_at_{k}" for k in evaluation_ks),
         *FIXED_CSV_COLUMNS[8:],
+        *EXTRA_CSV_COLUMNS,
+        *(f"any_gold_recall_at_{k}" for k in evaluation_ks),
+        *TRAILING_CSV_COLUMNS,
     ]
 
 
@@ -146,9 +173,17 @@ def _persist_results_to_csv(
                 "dataset_prep_seconds": record["dataset_prep_seconds"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
+                "query_count": record["query_count"],
+                "multi_target_query_count": record["multi_target_query_count"],
+                "mean_candidate_count": record["mean_candidate_count"],
+                "any_gold_mrr": record["any_gold_mrr"],
+                "rank_cutoff": record["rank_cutoff"],
+                "candidate_policy": record["candidate_policy"],
+                "alignment_policy": record["alignment_policy"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
+                row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
 
 
@@ -161,7 +196,9 @@ def _default_output_csv_path() -> Path:
     return build_timestamped_results_path("result")
 
 
-def _build_tfidf_model_run(params: TfidfGridEntry) -> ModelRunSpec:
+def _build_tfidf_model_run(
+    params: TfidfGridEntry, candidate_policy: str = "nonzero"
+) -> ModelRunSpec:
     return ModelRunSpec(
         model_name="tfidf",
         hyperparameters={
@@ -175,15 +212,18 @@ def _build_tfidf_model_run(params: TfidfGridEntry) -> ModelRunSpec:
             min_df=params.min_df,
             max_df=params.max_df,
             sublinear_tf=params.sublinear_tf,
+            candidate_policy=candidate_policy,
         ),
     )
 
 
-def _build_bm25_model_run(params: Bm25GridEntry) -> ModelRunSpec:
+def _build_bm25_model_run(
+    params: Bm25GridEntry, candidate_policy: str = "nonzero"
+) -> ModelRunSpec:
     return ModelRunSpec(
         model_name="bm25",
         hyperparameters={"k1": params.k1, "b": params.b},
-        retriever=Bm25Retriever(k1=params.k1, b=params.b),
+        retriever=Bm25Retriever(k1=params.k1, b=params.b, candidate_policy=candidate_policy),
     )
 
 
@@ -195,32 +235,34 @@ def _build_exact_match_model_run() -> ModelRunSpec:
     )
 
 
-def _build_char_ngram_model_run() -> ModelRunSpec:
+def _build_char_ngram_model_run(candidate_policy: str = "nonzero") -> ModelRunSpec:
     return ModelRunSpec(
         model_name="char_ngram",
         hyperparameters=fixed_method_hyperparameters("char_ngram"),
-        retriever=CharNgramRetriever(),
+        retriever=CharNgramRetriever(candidate_policy=candidate_policy),
     )
 
 
 def _build_model_runs(
-    tfidf_grid: list[TfidfGridEntry], bm25_grid: list[Bm25GridEntry]
+    tfidf_grid: list[TfidfGridEntry],
+    bm25_grid: list[Bm25GridEntry],
+    candidate_policy: str = "nonzero",
 ) -> list[ModelRunSpec]:
     model_runs: list[ModelRunSpec] = []
     for method_name in development_method_names():
         if method_name == "tfidf":
             for params in tfidf_grid:
-                model_runs.append(_build_tfidf_model_run(params))
+                model_runs.append(_build_tfidf_model_run(params, candidate_policy))
             continue
         if method_name == "bm25":
             for params in bm25_grid:
-                model_runs.append(_build_bm25_model_run(params))
+                model_runs.append(_build_bm25_model_run(params, candidate_policy))
             continue
         if method_name == "exact_match":
             model_runs.append(_build_exact_match_model_run())
             continue
         if method_name == "char_ngram":
-            model_runs.append(_build_char_ngram_model_run())
+            model_runs.append(_build_char_ngram_model_run(candidate_policy))
             continue
         raise ValueError(f"Unsupported registered development method: {method_name}")
     return model_runs
@@ -247,8 +289,12 @@ def run_experiments(
     datasets = runtime_config.development_datasets
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
+    candidate_policy = runtime_config.experiments.candidate_policy
+    alignment_policy = runtime_config.experiments.alignment_policy
     model_runs = _build_model_runs(
-        runtime_config.experiments.tfidf_grid, runtime_config.experiments.bm25_grid
+        runtime_config.experiments.tfidf_grid,
+        runtime_config.experiments.bm25_grid,
+        candidate_policy,
     )
 
     logger.info(
@@ -311,14 +357,10 @@ def run_experiments(
                 len(target_entities),
             )
 
-            gold_raw = load_alignment_mappings(dataset.alignment_rdf)
-            target_set = set(target_entities)
-            source_set = set(source_entities)
-            gold_filtered = {
-                source: target
-                for source, target in gold_raw.items()
-                if source in source_set and target in target_set
-            }
+            gold_raw = load_alignment_targets(dataset.alignment_rdf, alignment_policy)
+            gold_filtered = filter_alignment_targets(
+                gold_raw, set(source_entities), set(target_entities)
+            )
 
             if not gold_filtered:
                 logger.warning(
@@ -350,7 +392,8 @@ def run_experiments(
             )
             source_token_map = dict(zip(eval_sources, source_tokens, strict=True))
             candidate_size = min(k_max, len(target_entities))
-            gold_count = len(gold_filtered)
+            gold_count = sum(len(targets) for targets in gold_filtered.values())
+            multi_target_query_count = multi_target_source_count(gold_filtered)
             dataset_prep_seconds = time.perf_counter() - dataset_prep_start
 
             logger.info(
@@ -421,10 +464,11 @@ def run_experiments(
                                 source_label_map[source_id], k=k_max
                             )
 
-                    raw_recalls, mrr = compute_recall_at_ks_and_mrr(
+                    metrics = compute_retrieval_metrics(
                         predictions, gold_filtered, evaluation_ks
                     )
-                    recalls = {k: raw_recalls[k] for k in evaluation_ks}
+                    recalls = {k: metrics.recalls[k] for k in evaluation_ks}
+                    mrr = metrics.mrr
                     result_record: ExperimentResultRecord = {
                         "dataset_name": dataset.name,
                         "track": dataset.track,
@@ -433,13 +477,25 @@ def run_experiments(
                         "hyperparameters": run.hyperparameters,
                         "num_source_entities": len(source_entities),
                         "num_target_entities": len(target_entities),
-                        "num_gold_pairs": len(gold_filtered),
+                        "num_gold_pairs": gold_count,
                         "gold_count": gold_count,
                         "candidate_size": candidate_size,
                         "dataset_prep_seconds": dataset_prep_seconds,
                         "recalls": recalls,
                         "mrr": mrr,
                         "runtime_seconds": time.perf_counter() - run_start,
+                        "query_count": metrics.query_count,
+                        "multi_target_query_count": multi_target_query_count,
+                        "mean_candidate_count": mean_candidate_count(
+                            predictions, eval_sources
+                        ),
+                        "any_gold_recalls": {
+                            k: metrics.any_gold_recalls[k] for k in evaluation_ks
+                        },
+                        "any_gold_mrr": metrics.any_gold_mrr,
+                        "rank_cutoff": k_max,
+                        "candidate_policy": candidate_policy,
+                        "alignment_policy": alignment_policy,
                     }
                     results.append(result_record)
                     successful_model_runs += 1

@@ -13,8 +13,14 @@ class CharNgramRetrieverTests(unittest.TestCase):
 
         results = retriever.retrieve("PlantHeight", k=2)
 
-        self.assertEqual(results[0][0], "urn:target:1")
-        self.assertGreater(results[0][1], results[1][1])
+        self.assertEqual([entity_id for entity_id, _score in results], ["urn:target:1"])
+        self.assertGreater(results[0][1], 0.0)
+
+        padded = CharNgramRetriever(candidate_policy="padded")
+        padded.fit(["urn:target:1", "urn:target:2"], ["plant height", "leaf color"])
+        padded_results = padded.retrieve("PlantHeight", k=2)
+        self.assertEqual(padded_results[0][0], "urn:target:1")
+        self.assertGreater(padded_results[0][1], padded_results[1][1])
 
     def test_is_robust_to_separator_and_camel_case_variation(self) -> None:
         retriever = CharNgramRetriever()
@@ -40,8 +46,17 @@ class CharNgramRetrieverTests(unittest.TestCase):
         self.assertAlmostEqual(results[0][1], 1.0)
         self.assertAlmostEqual(results[1][1], 1.0)
 
-    def test_weak_overlap_still_returns_scored_candidates(self) -> None:
+    def test_no_shared_ngrams_returns_no_candidates(self) -> None:
         retriever = CharNgramRetriever()
+        retriever.fit(
+            ["urn:target:1", "urn:target:2"],
+            ["thor", "loki"],
+        )
+
+        self.assertEqual(retriever.retrieve("asgard", k=2), [])
+
+    def test_padded_policy_still_returns_zero_score_candidates(self) -> None:
+        retriever = CharNgramRetriever(candidate_policy="padded")
         retriever.fit(
             ["urn:target:1", "urn:target:2"],
             ["thor", "loki"],
@@ -50,7 +65,7 @@ class CharNgramRetrieverTests(unittest.TestCase):
         results = retriever.retrieve("asgard", k=2)
 
         self.assertEqual(len(results), 2)
-        self.assertTrue(all(isinstance(score, float) for _, score in results))
+        self.assertTrue(all(score == 0.0 for _, score in results))
 
 
 if __name__ == "__main__":

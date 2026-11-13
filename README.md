@@ -131,8 +131,21 @@ Incomplete typing behavior:
 
 ## Assumptions and Limitations
 
-- Gold alignments are evaluated as **1:1 source->target mappings** (`dict[source] -> target`).
-- If duplicate source mappings are present in alignment files, the first valid target is kept.
+- By default (`experiments.alignment_policy: all_targets`) every `=` target of a source is kept,
+  sorted deterministically, and filtering by entity type is applied per pair. `recall_at_k` and
+  `mrr` count each (source, target) gold pair; `any_gold_recall_at_k` and `any_gold_mrr` count
+  each source once, at the best rank of any of its gold targets.
+- `alignment_policy: legacy_first` reproduces the submitted version: one target per source (the
+  first parsed), deduplicated before type filtering. For alignment files that fall back to
+  `rdflib`, "first" depends on `PYTHONHASHSEED`; the submitted numbers reproduce with
+  `PYTHONHASHSEED=2`.
+- By default (`experiments.candidate_policy: nonzero`) a target is a candidate only if its score
+  is > 0, so lists can be shorter than `k`. `candidate_policy: padded` reproduces the submitted
+  version, which filled every list to `min(k, |T|)` with zero-score targets in URI order.
+- `mrr` is MRR@k_max: ranks beyond the largest `evaluation_ks` value are not observed. Result
+  CSVs record this cutoff in `rank_cutoff`.
+- `candidate_reduction_ratio` is `1 - mean_candidate_count / target_pool_size`, measured on the
+  candidates actually returned; `retained_candidate_size` keeps the nominal `min(k_max, |T|)`.
 - Dataset paths in config are expected to be **absolute paths** and must exist.
 - Source/target graph identity is inferred from dataset config naming (`dataset`, `track`, `version`) and is intentionally not duplicated as separate CSV identifier columns.
 - Concurrent near-simultaneous experiment runs are out of scope (default run-stamped filenames are not designed as a multi-writer coordination mechanism).
@@ -213,6 +226,8 @@ Config semantics and validation:
   - non-empty list
   - each entry requires `k1`, `b`
   - entries are executed in YAML order
+- `experiments.candidate_policy` (optional): `nonzero` (default) or `padded`
+- `experiments.alignment_policy` (optional): `all_targets` (default) or `legacy_first`
 - `development_datasets.<name>` and `heldout_datasets.<name>`:
   - requires `track`, `version`, `source_rdf`, `target_rdf`, `alignment_rdf`
   - RDF/alignment file paths are validated for existence before run starts
@@ -694,6 +709,10 @@ Scope note:
 - Source/target ontology loading remains on the existing `pyoxigraph` strict-then-lenient path.
 
 Result: dataset runs no longer fail due to these alignment parsing variants.
+
+Determinism note: `rdflib` does not preserve document order, so under `legacy_first` the target
+kept for a duplicated source can change with `PYTHONHASHSEED` (this affects `cmt#Conference` in
+`cmt-conference`). `all_targets` sorts all cells and is independent of parser order.
 
 ## Text Preprocessing
 

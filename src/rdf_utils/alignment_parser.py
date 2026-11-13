@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+from typing import Literal, Mapping
 
 from pyoxigraph import Literal as OxLiteral
 from pyoxigraph import NamedNode, RdfFormat, parse
@@ -14,6 +15,12 @@ from rdflib.term import Literal as RdflibLiteral
 from rdflib.term import URIRef
 
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+
+AlignmentPolicy = Literal["all_targets", "legacy_first"]
+ALIGNMENT_POLICIES: tuple[str, ...] = ("all_targets", "legacy_first")
+DEFAULT_ALIGNMENT_POLICY: AlignmentPolicy = "all_targets"
+
+GoldTargets = dict[str, tuple[str, ...]]
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +104,8 @@ def _collect_cell_data_rdflib(path: Path) -> dict[str, dict[str, object]]:
     return cell_data
 
 
-def load_alignment_mappings(alignment_path: str | Path) -> dict[str, str]:
-    """Load alignment mappings from an RDF/XML file as {source_entity: target_entity}."""
+def _parse_alignment_cells(alignment_path: str | Path) -> dict[str, dict[str, object]]:
+    """Parse alignment RDF/XML into raw per-cell fields, trying stricter parsers first."""
     path = Path(alignment_path)
     if not path.exists():
         raise FileNotFoundError(f"Alignment file not found: {path}")
@@ -129,8 +136,14 @@ def load_alignment_mappings(alignment_path: str | Path) -> dict[str, str]:
                 ) from rdflib_exc
 
     logger.info("Alignment parser backend for %s: %s", path, parser_backend)
+    return cell_data
 
-    mappings: dict[str, str] = {}
+
+def _iter_equivalence_pairs(
+    cell_data: dict[str, dict[str, object]],
+) -> list[tuple[str, str]]:
+    """Return (entity1, entity2) for valid '=' cells, in parser iteration order."""
+    pairs: list[tuple[str, str]] = []
     skipped_invalid_entities = 0
     for fields in cell_data.values():
         if not fields.get("is_cell"):
@@ -145,15 +158,80 @@ def load_alignment_mappings(alignment_path: str | Path) -> dict[str, str]:
         if not _is_absolute_http_iri(entity1) or not _is_absolute_http_iri(entity2):
             skipped_invalid_entities += 1
             continue
-        if entity1.value in mappings:
-            continue
-
-        mappings[entity1.value] = entity2.value
+        pairs.append((entity1.value, entity2.value))
 
     if skipped_invalid_entities:
         logger.info(
             "Skipped %d malformed alignment cells due to invalid entity IRIs",
             skipped_invalid_entities,
         )
+    return pairs
 
+
+def load_alignment_mappings(alignment_path: str | Path) -> dict[str, str]:
+    """Load alignment mappings as {source_entity: target_entity} (submitted-version behaviour).
+
+    Keeps only the first target seen per source, in parser iteration order. That order is
+    file order for the pyoxigraph backends but hash-seed dependent for the rdflib fallback,
+    and deduplication happens before any entity-type filtering. Prefer
+    ``load_alignment_targets(..., policy="all_targets")`` for new results.
+    """
+    mappings: dict[str, str] = {}
+    for source, target in _iter_equivalence_pairs(_parse_alignment_cells(alignment_path)):
+        if source in mappings:
+            continue
+        mappings[source] = target
     return mappings
+
+
+def load_alignment_targets(
+    alignment_path: str | Path,
+    policy: AlignmentPolicy = DEFAULT_ALIGNMENT_POLICY,
+) -> GoldTargets:
+    """Load alignment correspondences as {source_entity: (target_entity, ...)}.
+
+    - ``all_targets``: every distinct '=' target is kept per source; sources and targets
+      are sorted, so the result does not depend on parser iteration order.
+    - ``legacy_first``: the submitted-version single-target behaviour of
+      ``load_alignment_mappings``, wrapped in 1-tuples.
+    """
+    if policy == "legacy_first":
+        return {
+            source: (target,)
+            for source, target in load_alignment_mappings(alignment_path).items()
+        }
+    if policy != "all_targets":
+        raise ValueError(
+            f"alignment policy must be one of {list(ALIGNMENT_POLICIES)}; got {policy!r}."
+        )
+
+    grouped: dict[str, set[str]] = defaultdict(set)
+    for source, target in _iter_equivalence_pairs(_parse_alignment_cells(alignment_path)):
+        grouped[source].add(target)
+    return {source: tuple(sorted(grouped[source])) for source in sorted(grouped)}
+
+
+def filter_alignment_targets(
+    gold: Mapping[str, tuple[str, ...]],
+    source_entities: set[str] | frozenset[str],
+    target_entities: set[str] | frozenset[str],
+) -> GoldTargets:
+    """Keep pairs whose source and target are both evaluated entities; drop empty sources."""
+    filtered: GoldTargets = {}
+    for source in sorted(gold):
+        if source not in source_entities:
+            continue
+        kept = tuple(target for target in gold[source] if target in target_entities)
+        if kept:
+            filtered[source] = kept
+    return filtered
+
+
+def gold_pair_count(gold: Mapping[str, tuple[str, ...]]) -> int:
+    """Return the number of (source, target) gold pairs."""
+    return sum(len(targets) for targets in gold.values())
+
+
+def multi_target_source_count(gold: Mapping[str, tuple[str, ...]]) -> int:
+    """Return the number of sources with more than one gold target."""
+    return sum(1 for targets in gold.values() if len(targets) > 1)

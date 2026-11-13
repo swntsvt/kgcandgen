@@ -14,7 +14,11 @@ from typing import TypedDict, cast
 from tqdm import tqdm
 
 from src.config_loader import load_runtime_config
-from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.evaluation.metrics import (
+    compute_retrieval_metrics,
+    gold_target_ranks,
+    mean_candidate_count,
+)
 from src.experiments.experiment_runner import _load_store_with_fallback
 from src.method_registry import (
     fixed_method_hyperparameters,
@@ -23,7 +27,10 @@ from src.method_registry import (
     ordered_method_names,
 )
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    load_alignment_targets,
+    multi_target_source_count,
+)
 from src.rdf_utils.entity_partitioning import (
     EntityType,
     TypedAlignmentPartitions,
@@ -54,6 +61,18 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "mrr",
     "runtime_seconds",
 )
+# Appended after the submitted-version columns so existing readers keep working.
+EXTRA_CSV_COLUMNS: tuple[str, ...] = (
+    "query_count",
+    "multi_target_query_count",
+    "mean_candidate_count",
+)
+TRAILING_CSV_COLUMNS: tuple[str, ...] = (
+    "any_gold_mrr",
+    "rank_cutoff",
+    "candidate_policy",
+    "alignment_policy",
+)
 
 QUERY_CSV_COLUMNS: tuple[str, ...] = (
     "track",
@@ -69,6 +88,9 @@ QUERY_CSV_COLUMNS: tuple[str, ...] = (
     "gold_rank",
     "retrieved_in_top_kmax",
     "retrieval_band",
+    "gold_score",
+    "kth_score",
+    "candidate_count",
 )
 
 
@@ -90,6 +112,14 @@ class HeldoutKgResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+    query_count: int
+    multi_target_query_count: int
+    mean_candidate_count: float
+    any_gold_recalls: dict[int, float]
+    any_gold_mrr: float
+    rank_cutoff: int
+    candidate_policy: str
+    alignment_policy: str
 
 
 class HeldoutKgQueryRecord(TypedDict):
@@ -106,6 +136,9 @@ class HeldoutKgQueryRecord(TypedDict):
     gold_rank: int
     retrieved_in_top_kmax: bool
     retrieval_band: str
+    gold_score: float | None
+    kth_score: float | None
+    candidate_count: int
 
 
 @dataclass(frozen=True)
@@ -258,6 +291,7 @@ def _predict_for_method(
     source_token_map: dict[str, list[str]],
     eval_sources: list[str],
     k_max: int,
+    candidate_policy: str = "nonzero",
 ) -> dict[str, list[tuple[str, float]]]:
     if method_name == "tfidf":
         retriever = TfidfRetriever(
@@ -265,6 +299,7 @@ def _predict_for_method(
             min_df=cast(int | float, hyperparameters["min_df"]),
             max_df=cast(int | float, hyperparameters["max_df"]),
             sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
         return {
@@ -279,6 +314,7 @@ def _predict_for_method(
         retriever = Bm25Retriever(
             k1=float(cast(int | float, hyperparameters["k1"])),
             b=float(cast(int | float, hyperparameters["b"])),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_tokenized(target_entities, target_tokens)
         return {
@@ -301,7 +337,7 @@ def _predict_for_method(
         }
 
     if method_name == "char_ngram":
-        retriever = CharNgramRetriever()
+        retriever = CharNgramRetriever(candidate_policy=candidate_policy)
         retriever.fit(target_entities, target_labels)
         return {
             source_id: retriever.retrieve(
@@ -331,6 +367,9 @@ def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
         *FIXED_CSV_COLUMNS[:10],
         *(f"recall_at_{k}" for k in evaluation_ks),
         *FIXED_CSV_COLUMNS[10:],
+        *EXTRA_CSV_COLUMNS,
+        *(f"any_gold_recall_at_{k}" for k in evaluation_ks),
+        *TRAILING_CSV_COLUMNS,
     ]
 
 
@@ -362,9 +401,17 @@ def _persist_results_to_csv(
                 "candidate_reduction_ratio": record["candidate_reduction_ratio"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
+                "query_count": record["query_count"],
+                "multi_target_query_count": record["multi_target_query_count"],
+                "mean_candidate_count": record["mean_candidate_count"],
+                "any_gold_mrr": record["any_gold_mrr"],
+                "rank_cutoff": record["rank_cutoff"],
+                "candidate_policy": record["candidate_policy"],
+                "alignment_policy": record["alignment_policy"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
+                row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
 
 
@@ -405,6 +452,9 @@ def _persist_query_results_to_csv(
                 "gold_rank": record["gold_rank"],
                 "retrieved_in_top_kmax": record["retrieved_in_top_kmax"],
                 "retrieval_band": record["retrieval_band"],
+                "gold_score": "" if record["gold_score"] is None else record["gold_score"],
+                "kth_score": "" if record["kth_score"] is None else record["kth_score"],
+                "candidate_count": record["candidate_count"],
             }
             writer.writerow(row)
 
@@ -440,7 +490,7 @@ def _entity_values(partitions: TypedEntityPartitions, entity_type: EntityType) -
 def _gold_values(
     partitions: TypedAlignmentPartitions,
     entity_type: EntityType,
-) -> dict[str, str]:
+) -> dict[str, tuple[str, ...]]:
     if entity_type is EntityType.CLASS:
         return partitions.classes
     if entity_type is EntityType.PREDICATE:
@@ -453,7 +503,7 @@ def _validate_type_partition(
     dataset_name: str,
     entity_type: EntityType,
     target_entities: tuple[str, ...],
-    gold: dict[str, str],
+    gold: dict[str, tuple[str, ...]],
 ) -> None:
     if not target_entities:
         raise HeldoutKgRunnerValidationError(
@@ -489,6 +539,8 @@ def run_heldout_kg_experiments(
 
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
+    candidate_policy = runtime_config.experiments.candidate_policy
+    alignment_policy = runtime_config.experiments.alignment_policy
     logger.info(
         "Starting held-out KG run with config=%s selected_settings=%s output_csv_path=%s progress=%s",
         config_path,
@@ -517,7 +569,7 @@ def run_heldout_kg_experiments(
         )
         source_store = _load_store_with_fallback(dataset.source_rdf)
         target_store = _load_store_with_fallback(dataset.target_rdf)
-        gold_raw = load_alignment_mappings(dataset.alignment_rdf)
+        gold_raw = load_alignment_targets(dataset.alignment_rdf, alignment_policy)
         source_partitions = extract_typed_entity_partitions(
             source_store,
             graph_name=f"{dataset_name}:source",
@@ -556,18 +608,18 @@ def run_heldout_kg_experiments(
             source_token_map = dict(zip(eval_sources, source_tokens, strict=True))
             target_pool_size = len(target_entities)
             retained_candidate_size = min(k_max, target_pool_size)
-            candidate_reduction_ratio = 1.0 - (
-                retained_candidate_size / target_pool_size
-            )
+            gold_pairs = sum(len(targets) for targets in gold.values())
+            multi_target_query_count = multi_target_source_count(gold)
 
             logger.info(
-                "Held-out dataset '%s' entity_type=%s setup: target_pool_size=%d gold_count=%d retained_candidate_size=%d reduction_ratio=%.6f",
+                "Held-out dataset '%s' entity_type=%s setup: target_pool_size=%d gold_pairs=%d queries=%d multi_target_queries=%d nominal_candidate_size=%d",
                 dataset_name,
                 entity_type.value,
                 target_pool_size,
+                gold_pairs,
                 len(gold),
+                multi_target_query_count,
                 retained_candidate_size,
-                candidate_reduction_ratio,
             )
 
             for method_run in method_runs:
@@ -593,12 +645,15 @@ def run_heldout_kg_experiments(
                     source_token_map=source_token_map,
                     eval_sources=eval_sources,
                     k_max=k_max,
+                    candidate_policy=candidate_policy,
                 )
 
-                raw_recalls, mrr = compute_recall_at_ks_and_mrr(
-                    predictions, gold, evaluation_ks
-                )
-                recalls = {k: raw_recalls[k] for k in evaluation_ks}
+                metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
+                recalls = {k: metrics.recalls[k] for k in evaluation_ks}
+                mrr = metrics.mrr
+                mean_candidates = mean_candidate_count(predictions, eval_sources)
+                # Reduction is measured on the candidates actually returned, not min(k, |T|).
+                candidate_reduction_ratio = 1.0 - (mean_candidates / target_pool_size)
                 results.append(
                     HeldoutKgResultRecord(
                         dataset_name=dataset.name,
@@ -607,13 +662,23 @@ def run_heldout_kg_experiments(
                         entity_type=entity_type.value,
                         model=method_name,
                         hyperparameters=hyperparameters,
-                        gold_count=len(gold),
+                        gold_count=gold_pairs,
                         target_pool_size=target_pool_size,
                         retained_candidate_size=retained_candidate_size,
                         candidate_reduction_ratio=candidate_reduction_ratio,
                         recalls=recalls,
                         mrr=mrr,
                         runtime_seconds=time.perf_counter() - run_start,
+                        query_count=metrics.query_count,
+                        multi_target_query_count=multi_target_query_count,
+                        mean_candidate_count=mean_candidates,
+                        any_gold_recalls={
+                            k: metrics.any_gold_recalls[k] for k in evaluation_ks
+                        },
+                        any_gold_mrr=metrics.any_gold_mrr,
+                        rank_cutoff=k_max,
+                        candidate_policy=candidate_policy,
+                        alignment_policy=alignment_policy,
                     )
                 )
                 logger.info(
@@ -626,26 +691,35 @@ def run_heldout_kg_experiments(
                 )
 
                 for source_id in eval_sources:
-                    gold_target = gold[source_id]
                     ranked = predictions.get(source_id, [])
-                    gold_rank = _gold_rank(ranked, gold_target)
-                    query_results.append(
-                        HeldoutKgQueryRecord(
-                            track=dataset.track,
-                            version=dataset.version,
-                            dataset_name=dataset.name,
-                            entity_type=entity_type.value,
-                            model=method_name,
-                            hyperparameters=hyperparameters,
-                            source_entity=source_id,
-                            source_label=source_label_map[source_id],
-                            gold_target=gold_target,
-                            gold_target_label=target_label_map.get(gold_target, ""),
-                            gold_rank=gold_rank,
-                            retrieved_in_top_kmax=(gold_rank > 0 and gold_rank <= k_max),
-                            retrieval_band=_retrieval_band(gold_rank),
+                    scores_by_target = {target: score for target, score in reversed(ranked)}
+                    kth_score = float(ranked[-1][1]) if ranked else None
+                    ranks_by_target = gold_target_ranks(ranked, gold[source_id])
+                    for gold_target, gold_rank in ranks_by_target.items():
+                        query_results.append(
+                            HeldoutKgQueryRecord(
+                                track=dataset.track,
+                                version=dataset.version,
+                                dataset_name=dataset.name,
+                                entity_type=entity_type.value,
+                                model=method_name,
+                                hyperparameters=hyperparameters,
+                                source_entity=source_id,
+                                source_label=source_label_map[source_id],
+                                gold_target=gold_target,
+                                gold_target_label=target_label_map.get(gold_target, ""),
+                                gold_rank=gold_rank,
+                                retrieved_in_top_kmax=(gold_rank > 0 and gold_rank <= k_max),
+                                retrieval_band=_retrieval_band(gold_rank),
+                                gold_score=(
+                                    float(scores_by_target[gold_target])
+                                    if gold_rank > 0
+                                    else None
+                                ),
+                                kth_score=kth_score,
+                                candidate_count=len(ranked),
+                            )
                         )
-                    )
         logger.info("Finished held-out dataset '%s'", dataset_name)
 
     _persist_results_to_csv(

@@ -261,6 +261,15 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "recall_at_2",
                         "mrr",
                         "runtime_seconds",
+                        "query_count",
+                        "multi_target_query_count",
+                        "mean_candidate_count",
+                        "any_gold_recall_at_1",
+                        "any_gold_recall_at_2",
+                        "any_gold_mrr",
+                        "rank_cutoff",
+                        "candidate_policy",
+                        "alignment_policy",
                     ],
                 )
                 rows = list(reader)
@@ -282,6 +291,9 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "gold_rank",
                         "retrieved_in_top_kmax",
                         "retrieval_band",
+                        "gold_score",
+                        "kth_score",
+                        "candidate_count",
                     ],
                 )
                 query_rows = list(query_reader)
@@ -367,12 +379,19 @@ class HeldoutKgRunnerTests(unittest.TestCase):
             for row in results
             if row["entity_type"] == "class" and row["model"] == "tfidf"
         )
+        # retained_candidate_size stays the nominal min(k_max, |T|); the reduction ratio
+        # is computed from the candidates actually returned.
         self.assertEqual(predicate_row["target_pool_size"], 2)
         self.assertEqual(predicate_row["retained_candidate_size"], 2)
-        self.assertAlmostEqual(predicate_row["candidate_reduction_ratio"], 0.0)
         self.assertEqual(class_row["target_pool_size"], 3)
         self.assertEqual(class_row["retained_candidate_size"], 2)
-        self.assertAlmostEqual(class_row["candidate_reduction_ratio"], 1.0 - (2.0 / 3.0))
+        for row in (predicate_row, class_row):
+            self.assertLessEqual(row["mean_candidate_count"], row["retained_candidate_size"])
+            self.assertAlmostEqual(
+                row["candidate_reduction_ratio"],
+                1.0 - (row["mean_candidate_count"] / row["target_pool_size"]),
+            )
+        self.assertGreater(predicate_row["candidate_reduction_ratio"], 0.0)
 
     def test_exact_match_heldout_rows_use_fixed_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

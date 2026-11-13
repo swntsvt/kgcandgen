@@ -244,6 +244,18 @@ heldout:
                         "recall_at_50",
                         "mrr",
                         "runtime_seconds",
+                        "query_count",
+                        "multi_target_query_count",
+                        "mean_candidate_count",
+                        "any_gold_recall_at_1",
+                        "any_gold_recall_at_5",
+                        "any_gold_recall_at_10",
+                        "any_gold_recall_at_20",
+                        "any_gold_recall_at_50",
+                        "any_gold_mrr",
+                        "rank_cutoff",
+                        "candidate_policy",
+                        "alignment_policy",
                     ],
                 )
                 rows = list(reader)
@@ -308,8 +320,20 @@ experiments:
                 "recall_at_4",
                 "mrr",
                 "runtime_seconds",
+                "query_count",
+                "multi_target_query_count",
+                "mean_candidate_count",
+                "any_gold_recall_at_2",
+                "any_gold_recall_at_4",
+                "any_gold_mrr",
+                "rank_cutoff",
+                "candidate_policy",
+                "alignment_policy",
             ],
         )
+        self.assertTrue(all(row["rank_cutoff"] == "4" for row in rows))
+        self.assertTrue(all(row["candidate_policy"] == "nonzero" for row in rows))
+        self.assertTrue(all(row["alignment_policy"] == "all_targets" for row in rows))
         self.assertEqual(len(rows), 4)
         self.assertTrue(all(row["gold_count"] == "2" for row in rows))
         self.assertTrue(all(row["candidate_size"] == "3" for row in rows))

@@ -120,9 +120,9 @@ class EntityPartitioningTests(unittest.TestCase):
             alignment_name="fixture alignment",
         )
 
-        self.assertEqual(partitions.classes, {source_class: target_class})
-        self.assertEqual(partitions.predicates, {source_predicate: target_predicate})
-        self.assertEqual(partitions.instances, {source_instance: target_instance})
+        self.assertEqual(partitions.classes, {source_class: (target_class,)})
+        self.assertEqual(partitions.predicates, {source_predicate: (target_predicate,)})
+        self.assertEqual(partitions.instances, {source_instance: (target_instance,)})
         self.assertEqual(partitions.skipped_mixed_type_pairs, 0)
         self.assertEqual(partitions.skipped_untyped_pairs, 0)
 
@@ -150,8 +150,32 @@ class EntityPartitioningTests(unittest.TestCase):
 
         self.assertIn(source_predicate, source_partitions.predicates)
         self.assertIn(target_predicate, target_partitions.predicates)
-        self.assertEqual(gold_partitions.predicates, {source_predicate: target_predicate})
+        self.assertEqual(gold_partitions.predicates, {source_predicate: (target_predicate,)})
         self.assertEqual(gold_partitions.skipped_untyped_pairs, 0)
+
+    def test_partition_alignment_mappings_classifies_each_target_of_a_source(self) -> None:
+        source_store = Store()
+        target_store = Store()
+        source_class = "http://dbkwik.webdatacommons.org/wiki/class/Character"
+        target_class_a = "http://dbkwik.webdatacommons.org/other/class/Character"
+        target_class_b = "http://dbkwik.webdatacommons.org/other/class/Hero"
+        target_predicate = "http://dbkwik.webdatacommons.org/other/property/hero"
+        for store, uri in (
+            (source_store, source_class),
+            (target_store, target_class_a),
+            (target_store, target_class_b),
+            (target_store, target_predicate),
+        ):
+            _add_named_node_quad(store, uri, RDFS_LABEL, "http://example.org/value/x")
+
+        partitions = partition_alignment_mappings_by_entity_type(
+            {source_class: (target_class_a, target_class_b, target_predicate)},
+            extract_typed_entity_partitions(source_store, graph_name="source"),
+            extract_typed_entity_partitions(target_store, graph_name="target"),
+        )
+
+        self.assertEqual(partitions.classes, {source_class: (target_class_a, target_class_b)})
+        self.assertEqual(partitions.skipped_mixed_type_pairs, 1)
 
     def test_partition_alignment_mappings_skips_mixed_and_untyped_pairs(self) -> None:
         source_store = Store()

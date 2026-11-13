@@ -283,6 +283,42 @@ heldout:
             ):
                 load_runtime_config(config_path)
 
+    def test_policies_default_to_corrected_behaviour(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = load_runtime_config(self._write_valid_config(Path(tmpdir)))
+
+        self.assertEqual(runtime.experiments.candidate_policy, "nonzero")
+        self.assertEqual(runtime.experiments.alignment_policy, "all_targets")
+
+    def test_legacy_policies_can_be_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    "experiments:\n",
+                    "experiments:\n  candidate_policy: padded\n  alignment_policy: legacy_first\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            runtime = load_runtime_config(config_path)
+
+        self.assertEqual(runtime.experiments.candidate_policy, "padded")
+        self.assertEqual(runtime.experiments.alignment_policy, "legacy_first")
+
+    def test_invalid_policies_raise(self) -> None:
+        for field in ("candidate_policy", "alignment_policy"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace(
+                        "experiments:\n", f"experiments:\n  {field}: bogus\n", 1
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, f"experiments.{field}"):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))
