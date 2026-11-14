@@ -9,6 +9,12 @@ rule used in the paper) is re-applied to each resample. For every configuration 
 least once the output gives how often it was picked, its grid-diagnostic category, its
 full-sample development MRR, and its held-out macro MRR and regret against the post-hoc best
 on each held-out tier. Inputs are read only from files listed in the canonical run manifest.
+
+The settings file (``.json`` next to the CSV) also records the configuration picked by a
+z-score variant of the rule on the full development tier: each track's mean MRR per cell is
+standardised to a z-score within the track (population SD) instead of a rank score, and the
+cell maximising mean(z) - lambda * SD(z) over tracks is picked, ties to the smallest
+configuration string.
 """
 
 from __future__ import annotations
@@ -65,6 +71,17 @@ def main() -> None:
         return dict(zip(chosen["method"], chosen["hyperparameters"]))
 
     full_pick = pick(development)
+
+    def zscore_pick(frame: pd.DataFrame) -> dict[str, str]:
+        picks = {}
+        for method, sub in frame.groupby("method"):
+            track = sub.groupby(["track", "hyperparameters"])["mrr"].mean().reset_index()
+            track["z"] = track.groupby("track")["mrr"].transform(lambda x: (x - x.mean()) / x.std(ddof=0))
+            agg = track.groupby("hyperparameters")["z"].agg(mu="mean", sd=lambda x: x.std(ddof=0))
+            agg["score"] = agg["mu"] - args.lambda_penalty * agg["sd"]
+            best = agg.reset_index().sort_values(["score", "hyperparameters"], ascending=[False, True])
+            picks[method] = str(best.iloc[0]["hyperparameters"])
+        return picks
     datasets_by_track = {t: sorted(g.dataset.unique()) for t, g in development.groupby("track")}
     by_dataset = {d: g for d, g in development.groupby("dataset")}
     rng = np.random.default_rng(args.seed)
@@ -94,7 +111,8 @@ def main() -> None:
     out.to_csv(args.output_csv, index=False)
     meta = {"label": args.label, "resamples": args.resamples, "lambda": args.lambda_penalty,
             "seed": args.seed, "stratified_by": "track", "unit": "dataset",
-            "datasets_per_track": {t: len(v) for t, v in datasets_by_track.items()}}
+            "datasets_per_track": {t: len(v) for t, v in datasets_by_track.items()},
+            "full_sample_pick": full_pick, "zscore_rule_pick": zscore_pick(development)}
     args.output_csv.with_suffix(".json").write_text(json.dumps(meta, indent=2))
     print(out.to_string(index=False))
 
