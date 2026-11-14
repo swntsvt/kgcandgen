@@ -6,7 +6,7 @@
 
 Every number comes from a file listed in ``results/canonical/<label>/manifest.json``,
 except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from the
-v1.0-submitted result files. Tables are numbered S1-S12 in the order written.
+v1.0-submitted result files. Tables are numbered S1-S16 in the order written.
 """
 
 from __future__ import annotations
@@ -275,6 +275,138 @@ def s8_efficiency(efficiency: pd.DataFrame) -> str:
     return "\n".join(out)
 
 
+def _unit_name(row) -> str:
+    if row.dataset in KG_ABBREV:
+        return KG_ABBREV[row.dataset]
+    return BIO_ABBREV.get(row.dataset, tt(row.dataset))
+
+
+def _accounting_rows(accounting: pd.DataFrame, cells) -> tuple[list[list[str]], set[int]]:
+    rows, midrules, last_tier, last_dataset = [], set(), None, None
+    for r in accounting.itertuples():
+        if last_tier is not None and r.tier != last_tier:
+            midrules.add(len(rows))
+        same = r.dataset == last_dataset
+        last_tier, last_dataset = r.tier, r.dataset
+        rows.append(["" if same else _unit_name(r), r.entity_type.capitalize()] + cells(r))
+    return rows, midrules
+
+
+def s9_accounting(accounting: pd.DataFrame) -> str:
+    def n(v) -> str:
+        return "0" if pd.isna(v) else f"{int(v):,}"
+
+    rows, midrules = _accounting_rows(accounting, lambda r: [
+        n(r.source_entities), n(r.target_entities), n(r.eval_queries), n(r.gold_pairs),
+        n(r.multi_target_queries), n(r.excluded_pairs)])
+    return table(
+        "Dataset accounting per evaluation unit. $|\\mathcal{S}|$ and $|\\mathcal{T}|$ are the source and target "
+        "entities of the evaluated type; ``Queries'' are the source entities with at least one gold target; "
+        "``Gold'' the gold pairs evaluated; ``Multi'' the queries with more than one gold target; ``Excl.'' the "
+        "equivalence pairs of the reference alignment that were excluded. All exclusions are development pairs "
+        "whose source entity is not a named \\texttt{owl:Class}; no KG pair is excluded, and no reference "
+        "alignment contains non-equivalence cells.",
+        "tab:s-accounting", "@{}llrrrrrr@{}",
+        ["Pair", "Type", "$|\\mathcal{S}|$", "$|\\mathcal{T}|$", "Queries", "Gold", "Multi", "Excl."],
+        rows, size=r"\scriptsize", midrules=midrules)
+
+
+def s10_labels(accounting: pd.DataFrame) -> str:
+    def pct(v) -> str:
+        return f"{100 * v:.0f}"
+
+    rows, midrules = _accounting_rows(accounting, lambda r: [
+        f"{r.query_label_chars_median:.0f}", f"{r.query_label_tokens_median:.0f}", f"{r.query_label_tokens_p90:.0f}",
+        pct(r.query_label_single_token_share), pct(r.query_label_uri_fallback_share),
+        f"{r.target_label_chars_median:.0f}", f"{r.target_label_tokens_median:.0f}",
+        pct(r.target_label_single_token_share)])
+    return table(
+        "Label statistics per evaluation unit, for query (source) labels and target labels: median length in "
+        "characters, median and 90th-percentile number of tokens after the token pipeline, percentage of "
+        "single-token labels, and percentage of labels taken from the URI because no \\texttt{rdfs:label} or "
+        "\\texttt{skos:prefLabel} exists.",
+        "tab:s-labels", "@{}llrrrrrrrr@{}",
+        ["Pair", "Type", "Q chars", "Q tok.", "Q tok.\\ p90", "Q 1-tok.\\,\\%", "Q URI\\,\\%",
+         "T chars", "T tok.", "T 1-tok.\\,\\%"],
+        rows, size=r"\scriptsize", midrules=midrules)
+
+
+def s11_provenance(config_path: Path, manifest_path: Path) -> str:
+    import yaml
+
+    config = yaml.safe_load(config_path.read_text())
+    files = pd.read_csv(manifest_path)
+    files["prefix"] = files.relative_path.str.split("/").str[:3].str.join("/")
+    datasets = {**config["development_datasets"], **config["heldout_datasets"],
+                **config["heldout_secondary_datasets"]}
+    tracks: dict[tuple[str, str], int] = {}
+    for spec in datasets.values():
+        tracks[(spec["track"], str(spec["version"]))] = tracks.get((spec["track"], str(spec["version"])), 0) + 1
+    rows = []
+    for (track, version), pairs in tracks.items():
+        prefix = next(p for p in files.prefix.unique() if p.split("/")[1] == track and p.split("/")[2] == version)
+        sub = files[files.prefix == prefix]
+        dates = ", ".join(sorted(set(sub.local_file_mtime_utc)))
+        rows.append([tt(track), tt(version), str(pairs), str(len(sub)), f"{sub.bytes.sum() / 1e6:,.1f}",
+                     f"\\texttt{{{tt(prefix.split('/', 1)[1])}/}}", dates])
+    return table(
+        "Benchmark provenance. Files were obtained from the OAEI test-data repository hosted at "
+        "\\texttt{oaei.webdatacommons.org}, in the layout shown, and verified by SHA-256 against "
+        "\\texttt{config/oaei\\_manifest.csv} before every run. ``Date'' is the date of the local copy, i.e.\\ "
+        "of access.",
+        "tab:s-provenance", "@{}llrrrll@{}",
+        ["Track", "Version", "Pairs", "Files", "MB", "Path prefix", "Date"], rows, size=r"\scriptsize")
+
+
+def s12_adaptive_k(dev_q: pd.DataFrame, kg_q: pd.DataFrame, accounting: pd.DataFrame,
+                   selected: dict[str, str]) -> str:
+    """Recall at a pool-relative depth on the small schema pools (reviewer request R1-6).
+
+    Gold ranks are stored to depth 50, so k = ceil(0.3|T|) is capped at 50; on units with
+    more than 166 targets the 0.3|T| column is therefore R@50, a lower bound.
+    """
+    import math
+
+    pools = {(r.dataset, r.entity_type): r.target_entities for r in accounting.itertuples()}
+    groups = [("Development: Conference classes", dev_q[dev_q.track == "conference"]),
+              ("KG Track: classes", kg_q[kg_q.entity_type == "class"]),
+              ("KG Track: predicates", kg_q[kg_q.entity_type == "predicate"])]
+    rows: list[list[str]] = []
+    midrules: set[int] = set()
+    for name, frame in groups:
+        frame = selected_filter(frame, selected).copy()
+        frame["T"] = [pools[(d, e)] for d, e in zip(frame.dataset, frame.entity_type)]
+        frame["k10"] = frame["T"].map(lambda t: math.ceil(0.1 * t))
+        frame["k30"] = frame["T"].map(lambda t: min(math.ceil(0.3 * t), 50))
+        if (frame.k10 > 50).any():
+            raise SystemExit("0.1|T| exceeds the stored rank depth")
+        rank = frame.gold_rank
+        hit = lambda k: ((rank >= 1) & (rank <= k)).groupby(frame.method).mean()  # noqa: E731
+        r5, r10, r30, r50 = hit(5), hit(frame.k10), hit(frame.k30), hit(50)
+        units = frame.drop_duplicates(["dataset", "entity_type"])
+        t = units["T"]
+        capped = int((units["T"].map(lambda v: math.ceil(0.3 * v)) > 50).sum())
+        if rows:
+            midrules.add(len(rows))
+        rows.append([f"\\multicolumn{{5}}{{@{{}}l}}{{\\emph{{{name}}}: {len(units)} units, $|\\mathcal{{T}}|$ "
+                     f"{t.min()}--{t.max()}, median $k$ {units.k10.median():.0f} / {units.k30.median():.0f}"
+                     f"{f', {capped} capped' if capped else ''}}}"])
+        rows.append(["\\quad Pool reduction", "--",
+                     f3((1 - units.k10 / t).mean()), f3((1 - units.k30 / t).mean()),
+                     f3((1 - t.clip(upper=50) / t).mean())])
+        for method in [m for m in FIXED_ORDER if m in r50.index]:
+            rows.append([f"\\quad {SHORT[method]}", f3(r5[method]), f3(r10[method]), f3(r30[method]), f3(r50[method])])
+    return table(
+        "Recall at a pool-relative candidate depth on the small schema pools. Recall is pair-level and micro-averaged "
+        "over the units of each group; lexical methods use their selected configuration. $k_{0.1}=\\lceil "
+        "0.1|\\mathcal{T}|\\rceil$ and $k_{0.3}=\\lceil 0.3|\\mathcal{T}|\\rceil$ are set per unit. Ranks are "
+        "stored to depth 50, so $k_{0.3}$ is capped at 50 on units with more than 166 targets (``capped''); "
+        "there it is a lower bound. ``Pool reduction'' is the mean share of the target pool excluded by a list of "
+        "that length.",
+        "tab:s-adaptive-k", "@{}lrrrr@{}",
+        ["", "R@5", "R@$k_{0.1}$", "R@$k_{0.3}$", "R@50"], rows, size=r"\small", midrules=midrules)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
@@ -297,6 +429,12 @@ def main() -> None:
         s6_bioml(bio, selected),
         s7_reduction(kg, bio, selected),
         s8_efficiency(run.csv(lambda p: p.endswith("/efficiency.csv"))),
+        s9_accounting(run.csv(lambda p: p.endswith("/dataset_accounting.csv"))),
+        s10_labels(run.csv(lambda p: p.endswith("/dataset_accounting.csv"))),
+        s11_provenance(ROOT / run.manifest["config"], ROOT / "config" / "oaei_manifest.csv"),
+        s12_adaptive_k(run.csv(lambda p: Path(p).name.startswith("query_result_")),
+                       run.csv(lambda p: Path(p).name.startswith("heldout_query_result_")),
+                       run.csv(lambda p: p.endswith("/dataset_accounting.csv")), selected),
     ]
     args.output.write_text("\n".join(parts))
     print(f"wrote {args.output}")
