@@ -8,7 +8,8 @@ Every number comes from a file listed in ``results/canonical/<label>/manifest.js
 except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from the
 v1.0-submitted result files. Tables are numbered S1-S16 in the order written,
 plus S17 from ``scripts/scaling_benchmark.py`` (``--scaling-csv``), S18 from
-``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``) and S19, the any-gold variant.
+``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``) S19, the any-gold variant, and
+S20-S21, macro and micro averages of every metric.
 """
 
 from __future__ import annotations
@@ -298,18 +299,24 @@ def s9_accounting(accounting: pd.DataFrame) -> str:
     def n(v) -> str:
         return "0" if pd.isna(v) else f"{int(v):,}"
 
+    first = ~accounting.dataset.eq(accounting.dataset.shift())
+    many_to_one = {i: (n(v) if f else "") for i, v, f in
+                   zip(accounting.index, accounting.many_to_one_targets, first)}
+    accounting = accounting.assign(m21_shown=[many_to_one[i] for i in accounting.index])
     rows, midrules = _accounting_rows(accounting, lambda r: [
         n(r.source_entities), n(r.target_entities), n(r.eval_queries), n(r.gold_pairs),
-        n(r.multi_target_queries), n(r.excluded_pairs)])
+        n(r.multi_target_queries), r.m21_shown, n(r.excluded_pairs)])
     return table(
         "Dataset accounting per evaluation unit. $|\\mathcal{S}|$ and $|\\mathcal{T}|$ are the source and target "
         "entities of the evaluated type; ``Queries'' are the source entities with at least one gold target; "
-        "``Gold'' the gold pairs evaluated; ``Multi'' the queries with more than one gold target; ``Excl.'' the "
+        "``Gold'' the gold pairs evaluated; ``Multi'' the queries with more than one gold target; ``M:1'' the "
+        "targets of the pair's reference alignment that are matched by more than one source (given once per "
+        "pair; each such source is queried and scored independently); ``Excl.'' the "
         "equivalence pairs of the reference alignment that were excluded. All exclusions are development pairs "
         "whose source entity is not a named \\texttt{owl:Class}; no KG pair is excluded, and no reference "
         "alignment contains non-equivalence cells.",
-        "tab:s-accounting", "@{}llrrrrrr@{}",
-        ["Pair", "Type", "$|\\mathcal{S}|$", "$|\\mathcal{T}|$", "Queries", "Gold", "Multi", "Excl."],
+        "tab:s-accounting", "@{}llrrrrrrr@{}",
+        ["Pair", "Type", "$|\\mathcal{S}|$", "$|\\mathcal{T}|$", "Queries", "Gold", "Multi", "M:1", "Excl."],
         rows, size=r"\scriptsize", midrules=midrules)
 
 
@@ -494,6 +501,46 @@ def s15_any_gold(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selecte
         ["", "R@50", "R@50 any", "MRR", "MRR any"], rows, size=r"\small", midrules=midrules)
 
 
+METRIC_COLS = ["recall_at_1", "recall_at_5", "recall_at_10", "recall_at_20", "recall_at_50", "mrr"]
+
+
+def _micro_macro_rows(frame: pd.DataFrame) -> list[list[str]]:
+    rows = []
+    for m in [m for m in FIXED_ORDER if m in set(frame.method)]:
+        sub = frame[frame.method == m]
+        macro = sub[METRIC_COLS].mean()
+        micro = (sub[METRIC_COLS].multiply(sub.gold_count, axis=0).sum() / sub.gold_count.sum())
+        rows.append([SHORT[m], "macro"] + [f3(macro[c]) for c in METRIC_COLS])
+        rows.append(["", "micro"] + [f3(micro[c]) for c in METRIC_COLS])
+    return rows
+
+
+def s16_micro_macro(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selected: dict[str, str]) -> str:
+    """Macro and micro averages of every metric on every tier (R2-7)."""
+    header = ["", "", "R@1", "R@5", "R@10", "R@20", "R@50", "MRR"]
+    out = []
+    for label, caption, groups in [
+        ("tab:s-micro-macro-dev-bio",
+         "Macro~(mean over evaluation units) and micro~(mean over gold pairs) averages of every metric on the "
+         "development and BioML tiers. Lexical methods use their selected configuration.",
+         [("Development (24 pairs, 2,668 gold pairs)", dev), ("BioML Track (5 pairs, 17,689 gold pairs)", bio)]),
+        ("tab:s-micro-macro-kg",
+         "Macro and micro averages of every metric on the KG Track, over all 15 evaluation units and per entity "
+         "type. Instances supply 15,127 of the 15,357 gold pairs, so the overall micro average follows them.",
+         [("All units", kg), ("Classes", kg[kg.entity_type == "class"]),
+          ("Predicates", kg[kg.entity_type == "predicate"]), ("Instances", kg[kg.entity_type == "instance"])]),
+    ]:
+        rows: list[list[str]] = []
+        midrules: set[int] = set()
+        for name, frame in groups:
+            if rows:
+                midrules.add(len(rows))
+            rows.append([f"\\multicolumn{{8}}{{@{{}}l}}{{\\emph{{{name}}}}}"])
+            rows += _micro_macro_rows(selected_filter(frame, selected))
+        out.append(table(caption, label, "@{}llrrrrrr@{}", header, rows, size=r"\scriptsize", midrules=midrules))
+    return "\n".join(out)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
@@ -533,6 +580,7 @@ def main() -> None:
         meta = json.loads(args.selection_bootstrap_csv.with_suffix(".json").read_text())
         parts.append(s14_selection_bootstrap(pd.read_csv(args.selection_bootstrap_csv), meta["resamples"]))
     parts.append(s15_any_gold(dev, kg, bio, selected))
+    parts.append(s16_micro_macro(dev, kg, bio, selected))
     args.output.write_text("\n".join(parts))
     print(f"wrote {args.output}")
 
