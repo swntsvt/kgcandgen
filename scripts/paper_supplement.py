@@ -6,7 +6,8 @@
 
 Every number comes from a file listed in ``results/canonical/<label>/manifest.json``,
 except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from the
-v1.0-submitted result files. Tables are numbered S1-S16 in the order written.
+v1.0-submitted result files. Tables are numbered S1-S16 in the order written,
+plus S17 from ``scripts/scaling_benchmark.py`` when ``--scaling-csv`` is given.
 """
 
 from __future__ import annotations
@@ -407,11 +408,47 @@ def s12_adaptive_k(dev_q: pd.DataFrame, kg_q: pd.DataFrame, accounting: pd.DataF
         ["", "R@5", "R@$k_{0.1}$", "R@$k_{0.3}$", "R@50"], rows, size=r"\small", midrules=midrules)
 
 
+def s13_scaling(scaling: pd.DataFrame) -> str:
+    """Marvel instance queries against growing target pools (reviewer request R1-5)."""
+    methods = [m for m in FIXED_ORDER if m in set(scaling.method)]
+    sizes = sorted(scaling.target_pool_size.unique())
+    pooled = int(scaling.loc[scaling.pool == "pooled_kg", "target_pool_size"].max())
+    full = int(scaling.loc[scaling.pool == "marvel_full", "target_pool_size"].max())
+    value = scaling.set_index(["target_pool_size", "method"])
+
+    def name(size: int) -> str:
+        return f"{size:,}" + (" (full)" if size == full else " (pooled)" if size == pooled else "")
+
+    panels = [("Build time (s)", "build_seconds", lambda v: f"{v:.1f}"),
+              ("Median query latency (ms)", "latency_median_ms", lambda v: f"{v:.3f}" if v < 1 else f"{v:.1f}"),
+              ("Recall@50", "recall_at_50", f3),
+              ("MRR@50", "mrr", f3)]
+    rows: list[list[str]] = []
+    midrules: set[int] = set()
+    for title, column, fmt in panels:
+        if rows:
+            midrules.add(len(rows))
+        rows.append([f"\\multicolumn{{{len(methods) + 1}}}{{@{{}}l}}{{\\emph{{{title}}}}}"])
+        for size in sizes:
+            rows.append([f"\\quad {name(size)}"] + [fmt(value.loc[(size, m), column]) for m in methods])
+    queries = int(scaling.query_count.iloc[0])
+    return table(
+        f"Scaling on the Marvel instance task. The {queries:,} Marvel instance queries are run against nested "
+        "subsamples of the Marvel target pool (every gold target plus a seeded sample of the others), the full "
+        f"pool, and a pooled set of {pooled:,} targets that adds the instance pools of the other four KG Track "
+        "pairs. Single-threaded on CPU with the protocol of Tables~\\ref{tab:s-build}--\\ref{tab:s-latency}; "
+        "Recall and MRR are pair-level.",
+        "tab:s-scaling", "@{}l" + "r" * len(methods) + "@{}",
+        [""] + [SHORT[m] for m in methods], rows, size=r"\small", midrules=midrules)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
     parser.add_argument("--old-vs-new", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--scaling-csv", type=Path, default=None,
+                        help="Output of scripts/scaling_benchmark.py; adds Table S17.")
     args = parser.parse_args()
     run = Run(args.label)
     selected_path = run.path(lambda p: p.endswith("heldout_selected_settings.json"))
@@ -436,6 +473,8 @@ def main() -> None:
                        run.csv(lambda p: Path(p).name.startswith("heldout_query_result_")),
                        run.csv(lambda p: p.endswith("/dataset_accounting.csv")), selected),
     ]
+    if args.scaling_csv is not None:
+        parts.append(s13_scaling(pd.read_csv(args.scaling_csv)))
     args.output.write_text("\n".join(parts))
     print(f"wrote {args.output}")
 

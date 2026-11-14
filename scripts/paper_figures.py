@@ -8,6 +8,8 @@ Reads only files listed in ``results/canonical/<label>/manifest.json``:
   coloured by diagnostic category (valid, reduced scoring, feature loss, failed).
 - ``latency_scaling.png/.pdf``: median single-thread query latency against target pool
   size (pools of at least 1,000 targets), log-log, one line per method.
+- ``marvel_scaling.png/.pdf`` (with ``--scaling-csv``): latency and Recall@50 of the Marvel
+  instance queries on nested Marvel subsamples, the full pool and the pooled KG set.
 """
 
 from __future__ import annotations
@@ -111,10 +113,38 @@ def draw_latency_scaling(efficiency: pd.DataFrame, output_dir: Path) -> None:
     _save(fig, output_dir, "latency_scaling")
 
 
+def draw_marvel_scaling(scaling: pd.DataFrame, output_dir: Path) -> None:
+    """Latency and Recall@50 of the fixed Marvel query set as the target pool grows."""
+    fig, (left, right) = plt.subplots(1, 2, figsize=(7.2, 3.2))
+    pooled = scaling.loc[scaling["pool"] == "pooled_kg", "target_pool_size"].max()
+    for method, label, colour, marker in LATENCY_METHODS:
+        rows = scaling[scaling["method"] == method].sort_values("target_pool_size")
+        if rows.empty:
+            continue
+        style = dict(color=colour, marker=marker, markersize=4, linewidth=0.9)
+        left.plot(rows["target_pool_size"], rows["latency_median_ms"], label=label, **style)
+        right.plot(rows["target_pool_size"], rows["recall_at_50"], **style)
+    for ax in (left, right):
+        ax.set_xscale("log")
+        ax.axvline(pooled, color="#999999", linestyle=":", linewidth=0.8)
+        ax.set_xlabel("Target pool size (entities)")
+        ax.grid(which="major", color="#dddddd", linewidth=0.6)
+        ax.spines[["top", "right"]].set_visible(False)
+    left.set_yscale("log")
+    left.set_ylabel("Median query latency (ms)")
+    right.set_ylabel("Recall@50")
+    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    handles, labels = left.get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=7, frameon=False, loc="lower center", ncol=3)
+    _save(fig, output_dir, "marvel_scaling")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--scaling-csv", type=Path, default=None,
+                        help="Output of scripts/scaling_benchmark.py; adds marvel_scaling.")
     args = parser.parse_args()
     manifest = json.loads((ROOT / "results" / "canonical" / args.label / "manifest.json").read_text())
     if manifest.get("status") != "complete":
@@ -122,6 +152,8 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     draw_grid_diagnostics(pd.read_csv(_artifact(manifest, "/grid_diagnostics.csv")), args.output_dir)
     draw_latency_scaling(pd.read_csv(_artifact(manifest, "/efficiency.csv")), args.output_dir)
+    if args.scaling_csv is not None:
+        draw_marvel_scaling(pd.read_csv(args.scaling_csv), args.output_dir)
 
 
 if __name__ == "__main__":
