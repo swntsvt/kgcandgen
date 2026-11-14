@@ -7,7 +7,8 @@
 Every number comes from a file listed in ``results/canonical/<label>/manifest.json``,
 except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from the
 v1.0-submitted result files. Tables are numbered S1-S16 in the order written,
-plus S17 from ``scripts/scaling_benchmark.py`` when ``--scaling-csv`` is given.
+plus S17 from ``scripts/scaling_benchmark.py`` (``--scaling-csv``), S18 from
+``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``) and S19, the any-gold variant.
 """
 
 from __future__ import annotations
@@ -320,16 +321,16 @@ def s10_labels(accounting: pd.DataFrame) -> str:
         f"{r.query_label_chars_median:.0f}", f"{r.query_label_tokens_median:.0f}", f"{r.query_label_tokens_p90:.0f}",
         pct(r.query_label_single_token_share), pct(r.query_label_uri_fallback_share),
         f"{r.target_label_chars_median:.0f}", f"{r.target_label_tokens_median:.0f}",
-        pct(r.target_label_single_token_share)])
+        pct(r.target_label_single_token_share), pct(r.target_label_uri_fallback_share)])
     return table(
         "Label statistics per evaluation unit, for query (source) labels and target labels: median length in "
         "characters, median and 90th-percentile number of tokens after the token pipeline, percentage of "
         "single-token labels, and percentage of labels taken from the URI because no \\texttt{rdfs:label} or "
         "\\texttt{skos:prefLabel} exists.",
-        "tab:s-labels", "@{}llrrrrrrrr@{}",
+        "tab:s-labels", "@{}llrrrrrrrrr@{}",
         ["Pair", "Type", "Q chars", "Q tok.", "Q tok.\\ p90", "Q 1-tok.\\,\\%", "Q URI\\,\\%",
-         "T chars", "T tok.", "T 1-tok.\\,\\%"],
-        rows, size=r"\scriptsize", midrules=midrules)
+         "T chars", "T tok.", "T 1-tok.\\,\\%", "T URI\\,\\%"],
+        rows, size=r"\scriptsize\setlength{\tabcolsep}{2.5pt}", midrules=midrules)
 
 
 def s11_provenance(config_path: Path, manifest_path: Path) -> str:
@@ -442,6 +443,57 @@ def s13_scaling(scaling: pd.DataFrame) -> str:
         [""] + [SHORT[m] for m in methods], rows, size=r"\small", midrules=midrules)
 
 
+def s14_selection_bootstrap(boot: pd.DataFrame, resamples: int) -> str:
+    """How often each configuration is selected when development datasets are resampled (R2-2)."""
+    rows: list[list[str]] = []
+    midrules: set[int] = set()
+    for method in ("bm25", "tfidf"):
+        sub = boot[boot.method == method].sort_values("picks", ascending=False)
+        if rows:
+            midrules.add(len(rows))
+        for r in sub.itertuples():
+            label = SHORT[method] if not rows or len(rows) in midrules else ""
+            mark = "$^\\ast$" if r.full_sample_pick else ""
+            rows.append([label, describe(method, r.hyperparameters) + mark, f"{100 * r.share:.1f}",
+                         CATEGORY[r.category], f3(r.development_mean_mrr),
+                         f3(r.kg_regret_macro), f3(r.bioml_regret_macro)])
+    return table(
+        f"Uncertainty of the selected configuration. Development datasets are resampled with replacement within "
+        f"each track ({resamples:,} resamples) and the stability-aware rule ($\\lambda=0.5$) is applied to each "
+        "resample. The table lists every configuration picked at least once, how often it was picked, its "
+        "diagnostic category, its full-sample development MRR, and its held-out macro-MRR regret against the "
+        "post-hoc best on each held-out tier. $^\\ast$: the configuration selected on the full development "
+        "tier. Anatomy has one development pair and Biodiversity two, so most of the resampling variation "
+        "comes from the 21 Conference pairs.",
+        "tab:s-selection-boot", "@{}llrlrrr@{}",
+        ["", "Configuration", "Picked\\,\\%", "Category", "Dev.\\ MRR", "KG regret", "BioML regret"],
+        rows, size=r"\small", midrules=midrules)
+
+
+def s15_any_gold(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selected: dict[str, str]) -> str:
+    """Pair-level metrics against the any-gold-target variant (R1-4)."""
+    rows: list[list[str]] = []
+    midrules: set[int] = set()
+    for name, frame in [("Development", dev), ("KG Track", kg), ("BioML Track", bio)]:
+        frame = selected_filter(frame, selected)
+        means = frame.groupby("method")[["recall_at_50", "any_gold_recall_at_50", "mrr", "any_gold_mrr"]].mean()
+        if rows:
+            midrules.add(len(rows))
+        keys = ["dataset", "entity_type"] if "entity_type" in frame else ["dataset"]
+        multi = int(frame.drop_duplicates(keys).multi_target_query_count.sum())
+        rows.append([f"\\multicolumn{{5}}{{@{{}}l}}{{\\emph{{{name}}}: {multi:,} multi-target queries}}"])
+        for m in [m for m in FIXED_ORDER if m in means.index]:
+            r = means.loc[m]
+            rows.append([f"\\quad {SHORT[m]}", f3(r.recall_at_50), f3(r.any_gold_recall_at_50), f3(r.mrr),
+                         f3(r.any_gold_mrr)])
+    return table(
+        "Pair-level metrics, used throughout the paper, against the any-gold variant, in which a query with "
+        "several gold targets counts as a hit if any of them is retrieved and its reciprocal rank is that of the "
+        "best-ranked one. Macro averages over evaluation units; lexical methods use their selected configuration.",
+        "tab:s-any-gold", "@{}lrrrr@{}",
+        ["", "R@50", "R@50 any", "MRR", "MRR any"], rows, size=r"\small", midrules=midrules)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
@@ -449,6 +501,8 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--scaling-csv", type=Path, default=None,
                         help="Output of scripts/scaling_benchmark.py; adds Table S17.")
+    parser.add_argument("--selection-bootstrap-csv", type=Path, default=None,
+                        help="Output of scripts/selection_bootstrap.py; adds Table S18.")
     args = parser.parse_args()
     run = Run(args.label)
     selected_path = run.path(lambda p: p.endswith("heldout_selected_settings.json"))
@@ -475,6 +529,10 @@ def main() -> None:
     ]
     if args.scaling_csv is not None:
         parts.append(s13_scaling(pd.read_csv(args.scaling_csv)))
+    if args.selection_bootstrap_csv is not None:
+        meta = json.loads(args.selection_bootstrap_csv.with_suffix(".json").read_text())
+        parts.append(s14_selection_bootstrap(pd.read_csv(args.selection_bootstrap_csv), meta["resamples"]))
+    parts.append(s15_any_gold(dev, kg, bio, selected))
     args.output.write_text("\n".join(parts))
     print(f"wrote {args.output}")
 

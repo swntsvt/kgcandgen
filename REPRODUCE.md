@@ -1,7 +1,11 @@
 # Reproducing the SN Computer Science revision results
 
-Every number in the revised manuscript comes from one run of the commands below at the
-tagged commit `v1.2-sncs-r1`, using `config/runtime.paper.yaml`. The submitted manuscript's
+Most numbers in the revised manuscript come from one run of steps 3-7 below at the tagged
+commit `v1.2-sncs-r1`, using `config/runtime.paper.yaml` (`scripts/canonical_run.py` runs
+them in order and writes `results/canonical/v1.2-sncs-r1/manifest.json`). The scaling curve
+and the selection bootstrap (step 8) come from two later scripts that use the same,
+unchanged retrieval and evaluation code. Step 9 regenerates the figures and the
+Supplementary Information tables. The submitted manuscript's
 numbers come from commit `6a34d4e` (tag `v1.0-submitted`); see "Reproducing the submitted
 version" at the end.
 
@@ -113,6 +117,36 @@ and are Holm-adjusted per scope and metric.
 
 The efficiency benchmark measures each method in a fresh single-threaded process; run it
 with no other heavy workload on the machine.
+
+## 8. Scaling curve and selection bootstrap
+
+```bash
+./venv/bin/python scripts/scaling_benchmark.py --config-path config/runtime.paper.yaml \
+    --selected-settings-json <path printed as "Selected Settings JSON"> \
+    --output-csv-path results/scaling/scaling_v1.2-sncs-r1.csv
+./venv/bin/python scripts/selection_bootstrap.py --label v1.2-sncs-r1 --resamples 1000 \
+    --output-csv results/selection_bootstrap/selection_bootstrap_v1.2-sncs-r1.csv
+```
+
+The scaling run (about 80 minutes single-threaded) runs the 1,653 Marvel instance queries
+against nested Marvel subsamples (10k-350k targets), the full pool (532,781) and the pooled
+KG instance set (709,045), and records cost plus Recall@1/10/50 and MRR@50. Each script
+writes a `.json` file of its settings next to its CSV.
+
+## 9. Figures and Supplementary Information
+
+```bash
+./venv/bin/python scripts/old_vs_new.py results/canonical/v1.2-sncs-r1/manifest.json ovn.csv
+./venv/bin/python scripts/paper_figures.py --label v1.2-sncs-r1 --output-dir <paper>/images \
+    --scaling-csv results/scaling/scaling_v1.2-sncs-r1.csv
+./venv/bin/python scripts/paper_supplement.py --label v1.2-sncs-r1 --old-vs-new ovn.csv \
+    --output <paper>/supplementary_tables.tex \
+    --scaling-csv results/scaling/scaling_v1.2-sncs-r1.csv \
+    --selection-bootstrap-csv results/selection_bootstrap/selection_bootstrap_v1.2-sncs-r1.csv
+```
+
+`old_vs_new.py` needs the submitted version's result files (tag `v1.0-submitted`) for the
+"submitted" column of Table S1.
 
 ## Determinism
 
