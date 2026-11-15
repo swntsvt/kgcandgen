@@ -9,7 +9,8 @@ except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from
 v1.0-submitted result files. Tables are numbered S1-S16 in the order written,
 plus S17 from ``scripts/scaling_benchmark.py`` (``--scaling-csv``), S18 from
 ``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``) S19, the any-gold variant, and
-S20-S21, macro and micro averages of every metric.
+S20-S21, macro and micro averages of every metric, and S22, each method's mean with a
+dataset-clustered interval.
 """
 
 from __future__ import annotations
@@ -541,6 +542,52 @@ def s16_micro_macro(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, sele
     return "\n".join(out)
 
 
+def _clustered_mean_ci(frame: pd.DataFrame, column: str, *, resamples: int = 10_000,
+                       seed: int = 20261114) -> tuple[float, float, float]:
+    """Macro mean over evaluation units with a dataset-clustered percentile bootstrap interval.
+
+    Whole datasets are resampled with replacement; a KG dataset contributes all of its entity
+    types together, as in the paired inference.
+    """
+    import numpy as np
+
+    by_dataset = frame.groupby("dataset")[column].agg(["sum", "count"])
+    sums, counts = by_dataset["sum"].to_numpy(), by_dataset["count"].to_numpy()
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(sums), size=(resamples, len(sums)))
+    boot = sums[idx].sum(axis=1) / counts[idx].sum(axis=1)
+    return float(sums.sum() / counts.sum()), float(np.percentile(boot, 2.5)), float(np.percentile(boot, 97.5))
+
+
+def s17_mean_ci(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selected: dict[str, str]) -> str:
+    """Each method's mean with a dataset-clustered 95% interval, per tier (minor comment m9)."""
+    rows: list[list[str]] = []
+    midrules: set[int] = set()
+    for name, frame in [("Development (24 pairs)", dev), ("KG Track, all units (5 datasets)", kg),
+                        ("KG classes", kg[kg.entity_type == "class"]),
+                        ("KG predicates", kg[kg.entity_type == "predicate"]),
+                        ("KG instances", kg[kg.entity_type == "instance"]), ("BioML Track (5 pairs)", bio)]:
+        frame = selected_filter(frame, selected)
+        if rows:
+            midrules.add(len(rows))
+        rows.append([f"\\multicolumn{{3}}{{@{{}}l}}{{\\emph{{{name}}}}}"])
+        for m in [m for m in FIXED_ORDER if m in set(frame.method)]:
+            sub = frame[frame.method == m]
+            cells = []
+            for column in ("mrr", "recall_at_50"):
+                mean, lo, hi = _clustered_mean_ci(sub, column)
+                cells.append(f"{mean:.3f} [{lo:.3f}, {hi:.3f}]")
+            rows.append([f"\\quad {SHORT[m]}"] + cells)
+    return table(
+        "Mean MRR and Recall@50 of every method with dataset-clustered 95\\% bootstrap intervals~(10,000 "
+        "resamples of whole datasets). Means are macro averages over evaluation units, as in Tables~2--5 of the "
+        "paper; lexical methods use their selected configuration. With five datasets per held-out tier the "
+        "intervals are approximate and probably too narrow; paired differences between methods, which are "
+        "more precise because both methods answer the same queries, are in Table~6 of the paper.",
+        "tab:s-mean-ci", "@{}lcc@{}", ["", "MRR [95\\% CI]", "Recall@50 [95\\% CI]"], rows,
+        size=r"\small", midrules=midrules)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--label", required=True)
@@ -581,6 +628,7 @@ def main() -> None:
         parts.append(s14_selection_bootstrap(pd.read_csv(args.selection_bootstrap_csv), meta["resamples"]))
     parts.append(s15_any_gold(dev, kg, bio, selected))
     parts.append(s16_micro_macro(dev, kg, bio, selected))
+    parts.append(s17_mean_ci(dev, kg, bio, selected))
     args.output.write_text("\n".join(parts))
     print(f"wrote {args.output}")
 
