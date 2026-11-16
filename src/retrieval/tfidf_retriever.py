@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import linear_kernel
 
 from src.preprocessing.text_preprocessor import preprocess_text
+from src.retrieval.topk import (
+    DEFAULT_CANDIDATE_POLICY,
+    CandidatePolicy,
+    top_k_indices,
+    validate_candidate_policy,
+)
 
 
 class TfidfRetriever:
@@ -18,7 +23,9 @@ class TfidfRetriever:
         min_df: int | float = 1,
         max_df: int | float = 1.0,
         sublinear_tf: bool = False,
+        candidate_policy: CandidatePolicy = DEFAULT_CANDIDATE_POLICY,
     ) -> None:
+        self._candidate_policy = validate_candidate_policy(candidate_policy)
         self._vectorizer = TfidfVectorizer(
             ngram_range=ngram_range,
             min_df=min_df,
@@ -67,6 +74,7 @@ class TfidfRetriever:
         # L2-normalized TF-IDF vectors make linear kernel equivalent to cosine similarity.
         scores = linear_kernel(query_vector, self._matrix).ravel()
 
-        candidate_count = min(k, len(self._entity_ids))
-        order = np.lexsort((np.arange(len(scores)), -scores))[:candidate_count]
+        order = top_k_indices(
+            scores, k, require_positive=self._candidate_policy == "nonzero"
+        )
         return [(self._entity_ids[idx], float(scores[idx])) for idx in order]

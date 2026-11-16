@@ -13,8 +13,16 @@ from typing import TypedDict, cast
 
 from tqdm import tqdm
 
-from src.config_loader import load_runtime_config
-from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.config_loader import FixedBaselineEntry, load_runtime_config
+from src.evaluation.metrics import compute_retrieval_metrics, mean_candidate_count
+from src.experiments.run_errors import error_record, errors_csv_path, write_errors_csv
+from src.experiments.query_records import (
+    QUERY_CSV_COLUMNS,
+    QueryRecord,
+    build_query_records,
+    query_output_csv_path,
+    write_query_csv,
+)
 from src.experiments.experiment_runner import _load_store_with_fallback
 from src.method_registry import (
     fixed_method_hyperparameters,
@@ -23,7 +31,10 @@ from src.method_registry import (
     ordered_method_names,
 )
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    load_alignment_targets,
+    multi_target_source_count,
+)
 from src.rdf_utils.entity_partitioning import (
     EntityType,
     TypedAlignmentPartitions,
@@ -32,6 +43,7 @@ from src.rdf_utils.entity_partitioning import (
     partition_alignment_mappings_by_entity_type,
 )
 from src.rdf_utils.label_extractor import extract_entity_label
+from src.retrieval.baselines import build_fixed_baseline
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
@@ -54,22 +66,23 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "mrr",
     "runtime_seconds",
 )
-
-QUERY_CSV_COLUMNS: tuple[str, ...] = (
-    "track",
-    "version",
-    "dataset",
-    "entity_type",
-    "method",
-    "hyperparameters",
-    "source_entity",
-    "source_label",
-    "gold_target",
-    "gold_target_label",
-    "gold_rank",
-    "retrieved_in_top_kmax",
-    "retrieval_band",
+# Appended after the submitted-version columns so existing readers keep working.
+EXTRA_CSV_COLUMNS: tuple[str, ...] = (
+    "query_count",
+    "multi_target_query_count",
+    "mean_candidate_count",
 )
+TRAILING_CSV_COLUMNS: tuple[str, ...] = (
+    "any_gold_mrr",
+    "rank_cutoff",
+    "candidate_policy",
+    "alignment_policy",
+    "zero_candidate_query_share",
+)
+
+# Re-exported for callers that imported these from this module.
+HeldoutKgQueryRecord = QueryRecord
+__all__ = ["QUERY_CSV_COLUMNS", "HeldoutKgQueryRecord"]
 
 
 class HeldoutKgRunnerValidationError(ValueError):
@@ -90,22 +103,15 @@ class HeldoutKgResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
-
-
-class HeldoutKgQueryRecord(TypedDict):
-    track: str
-    version: str
-    dataset_name: str
-    entity_type: str
-    model: str
-    hyperparameters: dict[str, object]
-    source_entity: str
-    source_label: str
-    gold_target: str
-    gold_target_label: str
-    gold_rank: int
-    retrieved_in_top_kmax: bool
-    retrieval_band: str
+    query_count: int
+    multi_target_query_count: int
+    mean_candidate_count: float
+    any_gold_recalls: dict[int, float]
+    any_gold_mrr: float
+    rank_cutoff: int
+    candidate_policy: str
+    alignment_policy: str
+    zero_candidate_query_share: float
 
 
 @dataclass(frozen=True)
@@ -126,13 +132,7 @@ def _default_output_csv_path() -> Path:
 
 
 def _query_output_csv_path(results_output_csv_path: Path) -> Path:
-    stem = results_output_csv_path.stem
-    if stem.startswith("heldout_result_"):
-        suffix = stem.removeprefix("heldout_result_")
-        query_name = f"heldout_query_result_{suffix}.csv"
-    else:
-        query_name = f"{stem}_query.csv"
-    return results_output_csv_path.with_name(query_name)
+    return query_output_csv_path(results_output_csv_path)
 
 
 def _resolve_selected_settings_json(
@@ -228,6 +228,33 @@ def _build_heldout_method_runs(
     return method_runs
 
 
+
+def _build_full_grid_method_runs(runtime_config) -> list[HeldoutMethodRunSpec]:
+    """Every TF-IDF and BM25 grid configuration plus the fixed baselines (for regret analysis)."""
+    runs: list[HeldoutMethodRunSpec] = [
+        HeldoutMethodRunSpec(
+            method_name="tfidf",
+            hyperparameters={
+                "ngram_range": list(entry.ngram_range),
+                "min_df": entry.min_df,
+                "max_df": entry.max_df,
+                "sublinear_tf": entry.sublinear_tf,
+            },
+        )
+        for entry in runtime_config.experiments.tfidf_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(method_name="bm25", hyperparameters={"k1": entry.k1, "b": entry.b})
+        for entry in runtime_config.experiments.bm25_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(
+            method_name=name, hyperparameters=fixed_method_hyperparameters(name)
+        )
+        for name in fixed_method_names(heldout=True)
+    ]
+    return runs
+
 def _coerce_tfidf_ngram_range(value: object) -> tuple[int, int]:
     if not isinstance(value, list) or len(value) != 2:
         raise HeldoutKgRunnerValidationError(
@@ -258,13 +285,24 @@ def _predict_for_method(
     source_token_map: dict[str, list[str]],
     eval_sources: list[str],
     k_max: int,
+    candidate_policy: str = "nonzero",
+    dense_models: dict[str, FixedBaselineEntry] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
+    if dense_models and method_name in dense_models:
+        dense = build_fixed_baseline(dense_models[method_name], candidate_policy)
+        dense.fit(target_entities, target_labels)
+        ranked_lists = dense.retrieve_many(
+            [source_label_map[source_id] for source_id in eval_sources], k=k_max
+        )
+        return dict(zip(eval_sources, ranked_lists, strict=True))
+
     if method_name == "tfidf":
         retriever = TfidfRetriever(
             ngram_range=_coerce_tfidf_ngram_range(hyperparameters["ngram_range"]),
             min_df=cast(int | float, hyperparameters["min_df"]),
             max_df=cast(int | float, hyperparameters["max_df"]),
             sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
         return {
@@ -279,6 +317,7 @@ def _predict_for_method(
         retriever = Bm25Retriever(
             k1=float(cast(int | float, hyperparameters["k1"])),
             b=float(cast(int | float, hyperparameters["b"])),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_tokenized(target_entities, target_tokens)
         return {
@@ -301,7 +340,7 @@ def _predict_for_method(
         }
 
     if method_name == "char_ngram":
-        retriever = CharNgramRetriever()
+        retriever = CharNgramRetriever(candidate_policy=candidate_policy)
         retriever.fit(target_entities, target_labels)
         return {
             source_id: retriever.retrieve(
@@ -331,6 +370,9 @@ def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
         *FIXED_CSV_COLUMNS[:10],
         *(f"recall_at_{k}" for k in evaluation_ks),
         *FIXED_CSV_COLUMNS[10:],
+        *EXTRA_CSV_COLUMNS,
+        *(f"any_gold_recall_at_{k}" for k in evaluation_ks),
+        *TRAILING_CSV_COLUMNS,
     ]
 
 
@@ -362,71 +404,19 @@ def _persist_results_to_csv(
                 "candidate_reduction_ratio": record["candidate_reduction_ratio"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
+                "query_count": record["query_count"],
+                "multi_target_query_count": record["multi_target_query_count"],
+                "mean_candidate_count": record["mean_candidate_count"],
+                "any_gold_mrr": record["any_gold_mrr"],
+                "rank_cutoff": record["rank_cutoff"],
+                "candidate_policy": record["candidate_policy"],
+                "alignment_policy": record["alignment_policy"],
+                "zero_candidate_query_share": record["zero_candidate_query_share"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
+                row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
-
-
-def _persist_query_results_to_csv(
-    query_results: list[HeldoutKgQueryRecord],
-    output_csv_path: str | Path,
-) -> None:
-    ordered_query_results = sorted(
-        query_results,
-        key=lambda record: (
-            record["track"],
-            record["dataset_name"],
-            record["entity_type"],
-            record["model"],
-            record["source_entity"],
-        ),
-    )
-    output_path = Path(output_csv_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=list(QUERY_CSV_COLUMNS))
-        writer.writeheader()
-        for record in ordered_query_results:
-            row: dict[str, object] = {
-                "track": record["track"],
-                "version": record["version"],
-                "dataset": record["dataset_name"],
-                "entity_type": record["entity_type"],
-                "method": record["model"],
-                "hyperparameters": json.dumps(
-                    record["hyperparameters"], sort_keys=True, separators=(",", ":")
-                ),
-                "source_entity": record["source_entity"],
-                "source_label": record["source_label"],
-                "gold_target": record["gold_target"],
-                "gold_target_label": record["gold_target_label"],
-                "gold_rank": record["gold_rank"],
-                "retrieved_in_top_kmax": record["retrieved_in_top_kmax"],
-                "retrieval_band": record["retrieval_band"],
-            }
-            writer.writerow(row)
-
-
-def _gold_rank(
-    ranked_candidates: list[tuple[str, float]],
-    gold_target: str,
-) -> int:
-    for rank, (target_id, _score) in enumerate(ranked_candidates, start=1):
-        if target_id == gold_target:
-            return rank
-    return 0
-
-
-def _retrieval_band(gold_rank: int) -> str:
-    if gold_rank <= 0:
-        return "missed"
-    if gold_rank <= 10:
-        return "strong"
-    if gold_rank <= 50:
-        return "weak"
-    return "missed"
 
 
 def _entity_values(partitions: TypedEntityPartitions, entity_type: EntityType) -> tuple[str, ...]:
@@ -440,7 +430,7 @@ def _entity_values(partitions: TypedEntityPartitions, entity_type: EntityType) -
 def _gold_values(
     partitions: TypedAlignmentPartitions,
     entity_type: EntityType,
-) -> dict[str, str]:
+) -> dict[str, tuple[str, ...]]:
     if entity_type is EntityType.CLASS:
         return partitions.classes
     if entity_type is EntityType.PREDICATE:
@@ -453,7 +443,7 @@ def _validate_type_partition(
     dataset_name: str,
     entity_type: EntityType,
     target_entities: tuple[str, ...],
-    gold: dict[str, str],
+    gold: dict[str, tuple[str, ...]],
 ) -> None:
     if not target_entities:
         raise HeldoutKgRunnerValidationError(
@@ -470,17 +460,33 @@ def run_heldout_kg_experiments(
     selected_settings_path: str | Path | None = None,
     output_csv_path: str | Path | None = None,
     show_progress: bool | None = None,
+    full_grid: bool = False,
 ) -> list[HeldoutKgResultRecord]:
     """Run frozen TF-IDF and BM25 held-out KG evaluation by entity type."""
     validate_nltk_assets()
     progress_enabled = sys.stderr.isatty() if show_progress is None else show_progress
-    resolved_output_csv_path = (
-        Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
-    )
+    if output_csv_path is not None:
+        resolved_output_csv_path = Path(output_csv_path)
+    elif full_grid:
+        resolved_output_csv_path = build_timestamped_results_path("heldout_grid_result")
+    else:
+        resolved_output_csv_path = _default_output_csv_path()
     runtime_config = load_runtime_config(config_path=config_path, require_heldout=True)
-    selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
-    frozen_settings = _load_selected_settings(selected_settings_json)
-    method_runs = _build_heldout_method_runs(frozen_settings)
+    if full_grid:
+        # Post-hoc grid on held-out data, for selection-regret analysis only;
+        # never feeds back into configuration selection.
+        selected_settings_json = None
+        method_runs = _build_full_grid_method_runs(runtime_config)
+    else:
+        selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
+        frozen_settings = _load_selected_settings(selected_settings_json)
+        method_runs = _build_heldout_method_runs(frozen_settings)
+    dense_entries = runtime_config.experiments.fixed_baselines_for("kg")
+    dense_models = {entry.name: entry for entry in dense_entries}
+    method_runs = [
+        *method_runs,
+        *(HeldoutMethodRunSpec(entry.name, entry.hyperparameters()) for entry in dense_entries),
+    ]
     datasets = runtime_config.heldout_datasets
     if not datasets:
         raise HeldoutKgRunnerValidationError(
@@ -489,6 +495,8 @@ def run_heldout_kg_experiments(
 
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
+    candidate_policy = runtime_config.experiments.candidate_policy
+    alignment_policy = runtime_config.experiments.alignment_policy
     logger.info(
         "Starting held-out KG run with config=%s selected_settings=%s output_csv_path=%s progress=%s",
         config_path,
@@ -497,9 +505,10 @@ def run_heldout_kg_experiments(
         progress_enabled,
     )
 
-    query_output_csv_path = _query_output_csv_path(resolved_output_csv_path)
+    query_csv_path = _query_output_csv_path(resolved_output_csv_path)
     results: list[HeldoutKgResultRecord] = []
-    query_results: list[HeldoutKgQueryRecord] = []
+    query_results: list[QueryRecord] = []
+    run_errors: list[dict[str, str]] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -517,7 +526,7 @@ def run_heldout_kg_experiments(
         )
         source_store = _load_store_with_fallback(dataset.source_rdf)
         target_store = _load_store_with_fallback(dataset.target_rdf)
-        gold_raw = load_alignment_mappings(dataset.alignment_rdf)
+        gold_raw = load_alignment_targets(dataset.alignment_rdf, alignment_policy)
         source_partitions = extract_typed_entity_partitions(
             source_store,
             graph_name=f"{dataset_name}:source",
@@ -556,18 +565,18 @@ def run_heldout_kg_experiments(
             source_token_map = dict(zip(eval_sources, source_tokens, strict=True))
             target_pool_size = len(target_entities)
             retained_candidate_size = min(k_max, target_pool_size)
-            candidate_reduction_ratio = 1.0 - (
-                retained_candidate_size / target_pool_size
-            )
+            gold_pairs = sum(len(targets) for targets in gold.values())
+            multi_target_query_count = multi_target_source_count(gold)
 
             logger.info(
-                "Held-out dataset '%s' entity_type=%s setup: target_pool_size=%d gold_count=%d retained_candidate_size=%d reduction_ratio=%.6f",
+                "Held-out dataset '%s' entity_type=%s setup: target_pool_size=%d gold_pairs=%d queries=%d multi_target_queries=%d nominal_candidate_size=%d",
                 dataset_name,
                 entity_type.value,
                 target_pool_size,
+                gold_pairs,
                 len(gold),
+                multi_target_query_count,
                 retained_candidate_size,
-                candidate_reduction_ratio,
             )
 
             for method_run in method_runs:
@@ -581,24 +590,42 @@ def run_heldout_kg_experiments(
                     method_name,
                     hyperparameters,
                 )
-                predictions = _predict_for_method(
-                    method_name=method_name,
-                    hyperparameters=hyperparameters,
-                    target_entities=target_entities,
-                    target_labels=target_labels,
-                    target_labels_preprocessed=target_labels_preprocessed,
-                    target_tokens=target_tokens,
-                    source_label_map=source_label_map,
-                    source_label_preprocessed_map=source_label_preprocessed_map,
-                    source_token_map=source_token_map,
-                    eval_sources=eval_sources,
-                    k_max=k_max,
-                )
+                try:
+                    predictions = _predict_for_method(
+                        method_name=method_name,
+                        hyperparameters=hyperparameters,
+                        target_entities=target_entities,
+                        target_labels=target_labels,
+                        target_labels_preprocessed=target_labels_preprocessed,
+                        target_tokens=target_tokens,
+                        source_label_map=source_label_map,
+                        source_label_preprocessed_map=source_label_preprocessed_map,
+                        source_token_map=source_token_map,
+                        eval_sources=eval_sources,
+                        k_max=k_max,
+                        candidate_policy=candidate_policy,
+                        dense_models=dense_models,
+                    )
+                except Exception as exc:  # noqa: BLE001 - grid cells may legitimately fail
+                    if not full_grid:
+                        raise
+                    run_errors.append(
+                        error_record(
+                            dataset=dataset.name,
+                            entity_type=entity_type.value,
+                            method=method_name,
+                            hyperparameters=hyperparameters,
+                            exc=exc,
+                        )
+                    )
+                    continue
 
-                raw_recalls, mrr = compute_recall_at_ks_and_mrr(
-                    predictions, gold, evaluation_ks
-                )
-                recalls = {k: raw_recalls[k] for k in evaluation_ks}
+                metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
+                recalls = {k: metrics.recalls[k] for k in evaluation_ks}
+                mrr = metrics.mrr
+                mean_candidates = mean_candidate_count(predictions, eval_sources)
+                # Reduction is measured on the candidates actually returned, not min(k, |T|).
+                candidate_reduction_ratio = 1.0 - (mean_candidates / target_pool_size)
                 results.append(
                     HeldoutKgResultRecord(
                         dataset_name=dataset.name,
@@ -607,13 +634,27 @@ def run_heldout_kg_experiments(
                         entity_type=entity_type.value,
                         model=method_name,
                         hyperparameters=hyperparameters,
-                        gold_count=len(gold),
+                        gold_count=gold_pairs,
                         target_pool_size=target_pool_size,
                         retained_candidate_size=retained_candidate_size,
                         candidate_reduction_ratio=candidate_reduction_ratio,
                         recalls=recalls,
                         mrr=mrr,
                         runtime_seconds=time.perf_counter() - run_start,
+                        query_count=metrics.query_count,
+                        multi_target_query_count=multi_target_query_count,
+                        mean_candidate_count=mean_candidates,
+                        any_gold_recalls={
+                            k: metrics.any_gold_recalls[k] for k in evaluation_ks
+                        },
+                        any_gold_mrr=metrics.any_gold_mrr,
+                        rank_cutoff=k_max,
+                        candidate_policy=candidate_policy,
+                        alignment_policy=alignment_policy,
+                        zero_candidate_query_share=sum(
+                            1 for source in eval_sources if not predictions.get(source)
+                        )
+                        / len(eval_sources),
                     )
                 )
                 logger.info(
@@ -625,27 +666,22 @@ def run_heldout_kg_experiments(
                     results[-1]["runtime_seconds"],
                 )
 
-                for source_id in eval_sources:
-                    gold_target = gold[source_id]
-                    ranked = predictions.get(source_id, [])
-                    gold_rank = _gold_rank(ranked, gold_target)
-                    query_results.append(
-                        HeldoutKgQueryRecord(
-                            track=dataset.track,
-                            version=dataset.version,
-                            dataset_name=dataset.name,
-                            entity_type=entity_type.value,
-                            model=method_name,
-                            hyperparameters=hyperparameters,
-                            source_entity=source_id,
-                            source_label=source_label_map[source_id],
-                            gold_target=gold_target,
-                            gold_target_label=target_label_map.get(gold_target, ""),
-                            gold_rank=gold_rank,
-                            retrieved_in_top_kmax=(gold_rank > 0 and gold_rank <= k_max),
-                            retrieval_band=_retrieval_band(gold_rank),
-                        )
+                query_results.extend(
+                    build_query_records(
+                        track=dataset.track,
+                        version=dataset.version,
+                        dataset_name=dataset.name,
+                        entity_type=entity_type.value,
+                        method_name=method_name,
+                        hyperparameters=hyperparameters,
+                        eval_sources=eval_sources,
+                        gold=gold,
+                        predictions=predictions,
+                        source_label_map=source_label_map,
+                        target_label_map=target_label_map,
+                        k_max=k_max,
                     )
+                )
         logger.info("Finished held-out dataset '%s'", dataset_name)
 
     _persist_results_to_csv(
@@ -653,10 +689,9 @@ def run_heldout_kg_experiments(
         output_csv_path=resolved_output_csv_path,
         evaluation_ks=evaluation_ks,
     )
-    _persist_query_results_to_csv(
-        query_results,
-        output_csv_path=query_output_csv_path,
-    )
+    write_query_csv(query_results, query_csv_path)
+    if full_grid:
+        write_errors_csv(run_errors, errors_csv_path(resolved_output_csv_path))
     logger.info(
         "Persisted %d held-out KG result record(s) to %s",
         len(results),
@@ -665,7 +700,7 @@ def run_heldout_kg_experiments(
     logger.info(
         "Persisted %d held-out KG query-level record(s) to %s",
         len(query_results),
-        query_output_csv_path,
+        query_csv_path,
     )
     logger.info("Held-out KG run finished with %d result record(s)", len(results))
     return results

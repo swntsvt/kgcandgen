@@ -14,9 +14,19 @@ from typing import TypedDict, cast
 from pyoxigraph import NamedNode
 from tqdm import tqdm
 
-from src.config_loader import load_runtime_config
-from src.evaluation.metrics import compute_recall_at_ks_and_mrr
+from src.config_loader import FixedBaselineEntry, load_runtime_config
+from src.evaluation.metrics import (
+    compute_retrieval_metrics,
+    mean_candidate_count,
+)
 from src.experiments.experiment_runner import _load_store_with_fallback
+from src.experiments.run_errors import error_record, errors_csv_path, write_errors_csv
+from src.experiments.query_records import (
+    QueryRecord,
+    build_query_records,
+    query_output_csv_path,
+    write_query_csv,
+)
 from src.method_registry import (
     fixed_method_hyperparameters,
     fixed_method_names,
@@ -24,8 +34,13 @@ from src.method_registry import (
     ordered_method_names,
 )
 from src.preprocessing.text_preprocessor import preprocess_text, validate_nltk_assets
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    filter_alignment_targets,
+    load_alignment_targets,
+    multi_target_source_count,
+)
 from src.rdf_utils.label_extractor import extract_entity_label
+from src.retrieval.baselines import build_fixed_baseline
 from src.retrieval.bm25_retriever import Bm25Retriever
 from src.retrieval.char_ngram_retriever import CharNgramRetriever
 from src.retrieval.exact_match_retriever import ExactMatchRetriever
@@ -51,6 +66,19 @@ FIXED_CSV_COLUMNS: tuple[str, ...] = (
     "mrr",
     "runtime_seconds",
 )
+# Appended after the submitted-version columns so existing readers keep working.
+EXTRA_CSV_COLUMNS: tuple[str, ...] = (
+    "query_count",
+    "multi_target_query_count",
+    "mean_candidate_count",
+)
+TRAILING_CSV_COLUMNS: tuple[str, ...] = (
+    "any_gold_mrr",
+    "rank_cutoff",
+    "candidate_policy",
+    "alignment_policy",
+    "zero_candidate_query_share",
+)
 
 
 class HeldoutClassRunnerValidationError(ValueError):
@@ -71,6 +99,15 @@ class HeldoutClassResultRecord(TypedDict):
     recalls: dict[int, float]
     mrr: float
     runtime_seconds: float
+    query_count: int
+    multi_target_query_count: int
+    mean_candidate_count: float
+    any_gold_recalls: dict[int, float]
+    any_gold_mrr: float
+    rank_cutoff: int
+    candidate_policy: str
+    alignment_policy: str
+    zero_candidate_query_share: float
 
 
 @dataclass(frozen=True)
@@ -174,6 +211,33 @@ def _build_heldout_method_runs(
     return method_runs
 
 
+
+def _build_full_grid_method_runs(runtime_config) -> list[HeldoutMethodRunSpec]:
+    """Every TF-IDF and BM25 grid configuration plus the fixed baselines (for regret analysis)."""
+    runs: list[HeldoutMethodRunSpec] = [
+        HeldoutMethodRunSpec(
+            method_name="tfidf",
+            hyperparameters={
+                "ngram_range": list(entry.ngram_range),
+                "min_df": entry.min_df,
+                "max_df": entry.max_df,
+                "sublinear_tf": entry.sublinear_tf,
+            },
+        )
+        for entry in runtime_config.experiments.tfidf_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(method_name="bm25", hyperparameters={"k1": entry.k1, "b": entry.b})
+        for entry in runtime_config.experiments.bm25_grid
+    ]
+    runs += [
+        HeldoutMethodRunSpec(
+            method_name=name, hyperparameters=fixed_method_hyperparameters(name)
+        )
+        for name in fixed_method_names(heldout=True)
+    ]
+    return runs
+
 def _coerce_tfidf_ngram_range(value: object) -> tuple[int, int]:
     if not isinstance(value, list) or len(value) != 2:
         raise HeldoutClassRunnerValidationError(
@@ -204,13 +268,24 @@ def _predict_for_method(
     source_token_map: dict[str, list[str]],
     eval_sources: list[str],
     k_max: int,
+    candidate_policy: str = "nonzero",
+    dense_models: dict[str, FixedBaselineEntry] | None = None,
 ) -> dict[str, list[tuple[str, float]]]:
+    if dense_models and method_name in dense_models:
+        dense = build_fixed_baseline(dense_models[method_name], candidate_policy)
+        dense.fit(target_entities, target_labels)
+        ranked_lists = dense.retrieve_many(
+            [source_label_map[source_id] for source_id in eval_sources], k=k_max
+        )
+        return dict(zip(eval_sources, ranked_lists, strict=True))
+
     if method_name == "tfidf":
         retriever = TfidfRetriever(
             ngram_range=_coerce_tfidf_ngram_range(hyperparameters["ngram_range"]),
             min_df=cast(int | float, hyperparameters["min_df"]),
             max_df=cast(int | float, hyperparameters["max_df"]),
             sublinear_tf=cast(bool, hyperparameters["sublinear_tf"]),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_preprocessed(target_entities, target_labels_preprocessed)
         return {
@@ -225,6 +300,7 @@ def _predict_for_method(
         retriever = Bm25Retriever(
             k1=float(cast(int | float, hyperparameters["k1"])),
             b=float(cast(int | float, hyperparameters["b"])),
+            candidate_policy=candidate_policy,
         )
         retriever.fit_tokenized(target_entities, target_tokens)
         return {
@@ -247,7 +323,7 @@ def _predict_for_method(
         }
 
     if method_name == "char_ngram":
-        retriever = CharNgramRetriever()
+        retriever = CharNgramRetriever(candidate_policy=candidate_policy)
         retriever.fit(target_entities, target_labels)
         return {
             source_id: retriever.retrieve(
@@ -285,6 +361,9 @@ def _build_csv_columns(evaluation_ks: list[int]) -> list[str]:
         *FIXED_CSV_COLUMNS[:10],
         *(f"recall_at_{k}" for k in evaluation_ks),
         *FIXED_CSV_COLUMNS[10:],
+        *EXTRA_CSV_COLUMNS,
+        *(f"any_gold_recall_at_{k}" for k in evaluation_ks),
+        *TRAILING_CSV_COLUMNS,
     ]
 
 
@@ -316,9 +395,18 @@ def _persist_results_to_csv(
                 "candidate_reduction_ratio": record["candidate_reduction_ratio"],
                 "mrr": record["mrr"],
                 "runtime_seconds": record["runtime_seconds"],
+                "query_count": record["query_count"],
+                "multi_target_query_count": record["multi_target_query_count"],
+                "mean_candidate_count": record["mean_candidate_count"],
+                "any_gold_mrr": record["any_gold_mrr"],
+                "rank_cutoff": record["rank_cutoff"],
+                "candidate_policy": record["candidate_policy"],
+                "alignment_policy": record["alignment_policy"],
+                "zero_candidate_query_share": record["zero_candidate_query_share"],
             }
             for k in evaluation_ks:
                 row[f"recall_at_{k}"] = record["recalls"][k]
+                row[f"any_gold_recall_at_{k}"] = record["any_gold_recalls"][k]
             writer.writerow(row)
 
 
@@ -327,17 +415,33 @@ def run_heldout_class_experiments(
     selected_settings_path: str | Path | None = None,
     output_csv_path: str | Path | None = None,
     show_progress: bool | None = None,
+    full_grid: bool = False,
 ) -> list[HeldoutClassResultRecord]:
     """Run secondary held-out class-only evaluation."""
     validate_nltk_assets()
     progress_enabled = sys.stderr.isatty() if show_progress is None else show_progress
-    resolved_output_csv_path = (
-        Path(output_csv_path) if output_csv_path is not None else _default_output_csv_path()
-    )
+    if output_csv_path is not None:
+        resolved_output_csv_path = Path(output_csv_path)
+    elif full_grid:
+        resolved_output_csv_path = build_timestamped_results_path("heldout_class_grid_result")
+    else:
+        resolved_output_csv_path = _default_output_csv_path()
     runtime_config = load_runtime_config(config_path=config_path)
-    selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
-    frozen_settings = _load_selected_settings(selected_settings_json)
-    method_runs = _build_heldout_method_runs(frozen_settings)
+    if full_grid:
+        # Post-hoc grid on held-out data, for selection-regret analysis only;
+        # never feeds back into configuration selection.
+        selected_settings_json = None
+        method_runs = _build_full_grid_method_runs(runtime_config)
+    else:
+        selected_settings_json = _resolve_selected_settings_json(selected_settings_path)
+        frozen_settings = _load_selected_settings(selected_settings_json)
+        method_runs = _build_heldout_method_runs(frozen_settings)
+    dense_entries = runtime_config.experiments.fixed_baselines_for("class")
+    dense_models = {entry.name: entry for entry in dense_entries}
+    method_runs = [
+        *method_runs,
+        *(HeldoutMethodRunSpec(entry.name, entry.hyperparameters()) for entry in dense_entries),
+    ]
     datasets = runtime_config.heldout_secondary_datasets
     if not datasets:
         raise HeldoutClassRunnerValidationError(
@@ -346,8 +450,12 @@ def run_heldout_class_experiments(
 
     evaluation_ks = runtime_config.experiments.evaluation_ks
     k_max = max(evaluation_ks)
+    candidate_policy = runtime_config.experiments.candidate_policy
+    alignment_policy = runtime_config.experiments.alignment_policy
 
     results: list[HeldoutClassResultRecord] = []
+    query_results: list[QueryRecord] = []
+    run_errors: list[dict[str, str]] = []
     dataset_names = list(datasets.keys())
     dataset_iterator = tqdm(
         dataset_names,
@@ -358,16 +466,12 @@ def run_heldout_class_experiments(
         dataset = datasets[dataset_name]
         source_store = _load_store_with_fallback(dataset.source_rdf)
         target_store = _load_store_with_fallback(dataset.target_rdf)
-        gold_raw = load_alignment_mappings(dataset.alignment_rdf)
+        gold_raw = load_alignment_targets(dataset.alignment_rdf, alignment_policy)
         source_entities = _extract_owl_class_entities(source_store)
         target_entities = _extract_owl_class_entities(target_store)
         class_source_set = set(source_entities)
         class_target_set = set(target_entities)
-        gold = {
-            source: target
-            for source, target in gold_raw.items()
-            if source in class_source_set and target in class_target_set
-        }
+        gold = filter_alignment_targets(gold_raw, class_source_set, class_target_set)
         if not target_entities:
             raise HeldoutClassRunnerValidationError(
                 f"Held-out secondary dataset '{dataset_name}' has zero class target entities."
@@ -381,6 +485,7 @@ def run_heldout_class_experiments(
         target_labels = _build_labels(target_store, target_entities)
         source_labels = _build_labels(source_store, eval_sources)
         source_label_map = dict(zip(eval_sources, source_labels, strict=True))
+        target_label_map = dict(zip(target_entities, target_labels, strict=True))
         target_tokens, target_labels_preprocessed = _preprocess_labels(target_labels)
         source_tokens, source_labels_preprocessed = _preprocess_labels(source_labels)
         source_label_preprocessed_map = dict(
@@ -390,25 +495,46 @@ def run_heldout_class_experiments(
 
         target_pool_size = len(target_entities)
         retained_candidate_size = min(k_max, target_pool_size)
-        candidate_reduction_ratio = 1.0 - (retained_candidate_size / target_pool_size)
+        gold_pairs = sum(len(targets) for targets in gold.values())
+        multi_target_query_count = multi_target_source_count(gold)
 
         for method_run in method_runs:
             run_start = time.perf_counter()
-            predictions = _predict_for_method(
-                method_name=method_run.method_name,
-                hyperparameters=method_run.hyperparameters,
-                target_entities=target_entities,
-                target_labels=target_labels,
-                target_labels_preprocessed=target_labels_preprocessed,
-                target_tokens=target_tokens,
-                source_label_map=source_label_map,
-                source_label_preprocessed_map=source_label_preprocessed_map,
-                source_token_map=source_token_map,
-                eval_sources=eval_sources,
-                k_max=k_max,
-            )
-            raw_recalls, mrr = compute_recall_at_ks_and_mrr(predictions, gold, evaluation_ks)
-            recalls = {k: raw_recalls[k] for k in evaluation_ks}
+            try:
+                predictions = _predict_for_method(
+                    method_name=method_run.method_name,
+                    hyperparameters=method_run.hyperparameters,
+                    target_entities=target_entities,
+                    target_labels=target_labels,
+                    target_labels_preprocessed=target_labels_preprocessed,
+                    target_tokens=target_tokens,
+                    source_label_map=source_label_map,
+                    source_label_preprocessed_map=source_label_preprocessed_map,
+                    source_token_map=source_token_map,
+                    eval_sources=eval_sources,
+                    k_max=k_max,
+                    candidate_policy=candidate_policy,
+                    dense_models=dense_models,
+                )
+            except Exception as exc:  # noqa: BLE001 - grid cells may legitimately fail
+                if not full_grid:
+                    raise
+                run_errors.append(
+                    error_record(
+                        dataset=dataset.name,
+                        entity_type="class",
+                        method=method_run.method_name,
+                        hyperparameters=method_run.hyperparameters,
+                        exc=exc,
+                    )
+                )
+                continue
+            metrics = compute_retrieval_metrics(predictions, gold, evaluation_ks)
+            recalls = {k: metrics.recalls[k] for k in evaluation_ks}
+            mrr = metrics.mrr
+            mean_candidates = mean_candidate_count(predictions, eval_sources)
+            # Reduction is measured on the candidates actually returned, not min(k, |T|).
+            candidate_reduction_ratio = 1.0 - (mean_candidates / target_pool_size)
             results.append(
                 HeldoutClassResultRecord(
                     dataset_name=dataset.name,
@@ -417,13 +543,41 @@ def run_heldout_class_experiments(
                     entity_type="class",
                     model=method_run.method_name,
                     hyperparameters=method_run.hyperparameters,
-                    gold_count=len(gold),
+                    gold_count=gold_pairs,
                     target_pool_size=target_pool_size,
                     retained_candidate_size=retained_candidate_size,
                     candidate_reduction_ratio=candidate_reduction_ratio,
                     recalls=recalls,
                     mrr=mrr,
                     runtime_seconds=time.perf_counter() - run_start,
+                    query_count=metrics.query_count,
+                    multi_target_query_count=multi_target_query_count,
+                    mean_candidate_count=mean_candidates,
+                    any_gold_recalls={k: metrics.any_gold_recalls[k] for k in evaluation_ks},
+                    any_gold_mrr=metrics.any_gold_mrr,
+                    rank_cutoff=k_max,
+                    candidate_policy=candidate_policy,
+                    alignment_policy=alignment_policy,
+                    zero_candidate_query_share=sum(
+                        1 for source in eval_sources if not predictions.get(source)
+                    )
+                    / len(eval_sources),
+                )
+            )
+            query_results.extend(
+                build_query_records(
+                    track=dataset.track,
+                    version=dataset.version,
+                    dataset_name=dataset.name,
+                    entity_type="class",
+                    method_name=method_run.method_name,
+                    hyperparameters=method_run.hyperparameters,
+                    eval_sources=eval_sources,
+                    gold=gold,
+                    predictions=predictions,
+                    source_label_map=source_label_map,
+                    target_label_map=target_label_map,
+                    k_max=k_max,
                 )
             )
 
@@ -436,5 +590,14 @@ def run_heldout_class_experiments(
         "Persisted %d held-out class-only result record(s) to %s",
         len(results),
         resolved_output_csv_path,
+    )
+    query_csv_path = query_output_csv_path(resolved_output_csv_path)
+    write_query_csv(query_results, query_csv_path)
+    if full_grid:
+        write_errors_csv(run_errors, errors_csv_path(resolved_output_csv_path))
+    logger.info(
+        "Persisted %d held-out class-only query-level record(s) to %s",
+        len(query_results),
+        query_csv_path,
     )
     return results

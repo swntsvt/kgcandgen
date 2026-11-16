@@ -3,7 +3,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.rdf_utils.alignment_parser import load_alignment_mappings
+from src.rdf_utils.alignment_parser import (
+    ParsedTerm,
+    filter_alignment_targets,
+    gold_pair_count,
+    load_alignment_mappings,
+    load_alignment_targets,
+    multi_target_source_count,
+)
 
 
 def _alignment_rdf(maps_xml: str) -> str:
@@ -294,6 +301,131 @@ class AlignmentParserTests(unittest.TestCase):
         self.assertIn("pyoxigraph_strict=", message)
         self.assertIn("pyoxigraph_lenient=", message)
         self.assertIn("rdflib=", message)
+
+
+
+def _cell(source: str, target: str) -> dict[str, object]:
+    return {
+        "is_cell": True,
+        "entity1": ParsedTerm(kind="iri", value=source),
+        "entity2": ParsedTerm(kind="iri", value=target),
+        "relation": ParsedTerm(kind="literal", value="="),
+    }
+
+
+class AlignmentTargetsTests(unittest.TestCase):
+    _ONE_TO_MANY = """    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#A"/>
+        <entity2 rdf:resource="http://example.org/target#Z"/>
+        <relation>=</relation>
+      </Cell>
+    </map>
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#A"/>
+        <entity2 rdf:resource="http://example.org/target#B"/>
+        <relation>=</relation>
+      </Cell>
+    </map>
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#C"/>
+        <entity2 rdf:resource="http://example.org/target#D"/>
+        <relation>=</relation>
+      </Cell>
+    </map>"""
+
+    def _write(self, tmpdir: str) -> Path:
+        path = Path(tmpdir) / "alignment.rdf"
+        path.write_text(_alignment_rdf(self._ONE_TO_MANY), encoding="utf-8")
+        return path
+
+    def test_all_targets_keeps_every_target_sorted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gold = load_alignment_targets(self._write(tmpdir), "all_targets")
+
+        self.assertEqual(
+            gold,
+            {
+                "http://example.org/source#A": (
+                    "http://example.org/target#B",
+                    "http://example.org/target#Z",
+                ),
+                "http://example.org/source#C": ("http://example.org/target#D",),
+            },
+        )
+        self.assertEqual(gold_pair_count(gold), 3)
+        self.assertEqual(multi_target_source_count(gold), 1)
+
+    def test_legacy_first_keeps_first_parsed_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gold = load_alignment_targets(self._write(tmpdir), "legacy_first")
+
+        self.assertEqual(gold["http://example.org/source#A"], ("http://example.org/target#Z",))
+
+    def test_all_targets_does_not_depend_on_parser_iteration_order(self) -> None:
+        cells = [
+            ("c1", _cell("http://s/A", "http://t/Z")),
+            ("c2", _cell("http://s/A", "http://t/B")),
+            ("c3", _cell("http://s/C", "http://t/D")),
+        ]
+        results = []
+        for ordering in (cells, list(reversed(cells))):
+            with patch(
+                "src.rdf_utils.alignment_parser._parse_alignment_cells",
+                return_value=dict(ordering),
+            ):
+                results.append(load_alignment_targets("unused.rdf", "all_targets"))
+
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0]["http://s/A"], ("http://t/B", "http://t/Z"))
+
+    def test_unknown_policy_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            load_alignment_targets("unused.rdf", "first")  # type: ignore[arg-type]
+
+    def test_filter_keeps_valid_targets_and_drops_empty_sources(self) -> None:
+        gold = {"s1": ("t1", "t9"), "s2": ("t9",), "s3": ("t2",)}
+
+        filtered = filter_alignment_targets(gold, {"s1", "s2"}, {"t1", "t2"})
+
+        # s1 keeps its one valid target instead of being lost to a dedupe-then-filter order.
+        self.assertEqual(filtered, {"s1": ("t1",)})
+
+
+
+class AlignmentCellSummaryTests(unittest.TestCase):
+    def test_counts_relations_invalid_iris_and_one_to_many(self) -> None:
+        from src.rdf_utils.alignment_parser import alignment_cell_summary
+
+        maps = AlignmentTargetsTests._ONE_TO_MANY + """
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#E"/>
+        <entity2 rdf:resource="http://example.org/target#F"/>
+        <relation>&lt;</relation>
+      </Cell>
+    </map>
+    <map>
+      <Cell>
+        <entity1 rdf:resource="http://example.org/source#G"/>
+        <entity2 rdf:resource="PATO_1"/>
+        <relation>=</relation>
+      </Cell>
+    </map>"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "alignment.rdf"
+            path.write_text(_alignment_rdf(maps), encoding="utf-8")
+            summary = alignment_cell_summary(path)
+
+        self.assertEqual(summary["cell_count"], 5)
+        self.assertEqual(summary["equivalence_cell_count"], 4)
+        self.assertEqual(summary["non_equivalence_cell_count"], 1)
+        self.assertEqual(summary["invalid_iri_cell_count"], 1)
+        self.assertEqual(summary["distinct_equivalence_pairs"], 3)
+        self.assertEqual(summary["one_to_many_sources"], 1)
+        self.assertEqual(summary["many_to_one_targets"], 0)
 
 
 if __name__ == "__main__":

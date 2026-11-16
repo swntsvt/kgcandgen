@@ -104,6 +104,7 @@ def run_heldout_kg_experiments(
     selected_settings_path: str | Path | None,
     output_csv_path: str | Path | None,
     show_progress: bool | None,
+    full_grid: bool = False,
 ) -> list[HeldoutKgResultRecord]:
     from src.experiments.heldout_kg_runner import (
         run_heldout_kg_experiments as _impl,
@@ -114,6 +115,7 @@ def run_heldout_kg_experiments(
         selected_settings_path=selected_settings_path,
         output_csv_path=output_csv_path,
         show_progress=show_progress,
+        full_grid=full_grid,
     )
 
 
@@ -123,6 +125,7 @@ def run_heldout_class_experiments(
     selected_settings_path: str | Path | None,
     output_csv_path: str | Path | None,
     show_progress: bool | None,
+    full_grid: bool = False,
 ) -> list[HeldoutClassResultRecord]:
     from src.experiments.heldout_class_runner import (
         run_heldout_class_experiments as _impl,
@@ -133,6 +136,7 @@ def run_heldout_class_experiments(
         selected_settings_path=selected_settings_path,
         output_csv_path=output_csv_path,
         show_progress=show_progress,
+        full_grid=full_grid,
     )
 
 
@@ -307,6 +311,14 @@ def _build_report_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
 
 def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--full-grid",
+        action="store_true",
+        help=(
+            "Run every TF-IDF and BM25 grid configuration (post hoc, for selection-regret "
+            "analysis only). Requires --output-csv-path."
+        ),
+    )
+    parser.add_argument(
         "--config-path",
         default="config/runtime.yaml",
         help="Path to runtime YAML config (default: config/runtime.yaml).",
@@ -338,6 +350,14 @@ def _build_run_heldout_kg_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_run_heldout_class_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--full-grid",
+        action="store_true",
+        help=(
+            "Run every TF-IDF and BM25 grid configuration (post hoc, for selection-regret "
+            "analysis only). Requires --output-csv-path."
+        ),
+    )
     parser.add_argument(
         "--config-path",
         default="config/runtime.yaml",
@@ -472,6 +492,158 @@ def _build_full_run_parser(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _build_efficiency_benchmark_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config-path", default="config/runtime.yaml")
+    parser.add_argument("--selected-settings-json", default=None, help=_ADVANCED_HELP)
+    parser.add_argument(
+        "--tiers",
+        nargs="+",
+        default=["development", "kg", "class"],
+        choices=["development", "kg", "class"],
+    )
+    parser.add_argument("--datasets", nargs="+", default=None, help="Dataset names to include.")
+    parser.add_argument(
+        "--entity-types",
+        nargs="+",
+        default=["class", "predicate", "instance"],
+        choices=["class", "predicate", "instance"],
+        help="KG entity types to include (development and class tiers are class-only).",
+    )
+    parser.add_argument("--methods", nargs="+", default=None, help="Methods to include.")
+    parser.add_argument("--warmup", type=int, default=20, help="Untimed warm-up queries.")
+    parser.add_argument("--repeats", type=int, default=3, help="Timed passes over the queries.")
+    parser.add_argument("--max-queries", type=int, default=None, help="Seeded query sample size.")
+    parser.add_argument(
+        "--target-limit",
+        type=int,
+        default=None,
+        help="Seeded target-pool subsample size (gold targets always kept), for scaling curves.",
+    )
+    parser.add_argument("--seed", type=int, default=13)
+    parser.add_argument("--output-csv-path", default=None)
+
+
+def _run_efficiency_benchmark_cli(args: argparse.Namespace) -> int:
+    from src.experiments.efficiency_benchmark import run_efficiency_benchmark
+
+    rows = run_efficiency_benchmark(
+        config_path=args.config_path,
+        selected_settings_path=args.selected_settings_json,
+        tiers=args.tiers,
+        datasets=args.datasets,
+        entity_types=args.entity_types,
+        methods=args.methods,
+        warmup=args.warmup,
+        repeats=args.repeats,
+        max_queries=args.max_queries,
+        target_limit=args.target_limit,
+        seed=args.seed,
+        output_csv_path=args.output_csv_path,
+    )
+    print(f"Efficiency rows written: {len(rows)}")
+    return 0
+
+
+def _build_dataset_accounting_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--config-path", default="config/runtime.yaml")
+    parser.add_argument(
+        "--tiers",
+        nargs="+",
+        default=["development", "kg", "class"],
+        choices=["development", "kg", "class"],
+    )
+    parser.add_argument("--output-csv-path", default=None)
+
+
+def _run_dataset_accounting_cli(args: argparse.Namespace) -> int:
+    from src.analysis.dataset_accounting import run_dataset_accounting
+
+    rows = run_dataset_accounting(
+        config_path=args.config_path, tiers=args.tiers, output_csv_path=args.output_csv_path
+    )
+    print(f"Dataset accounting rows written: {len(rows)}")
+    return 0
+
+
+def _build_grid_diagnostics_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--results-csv", required=True, help="Development results CSV.")
+    parser.add_argument(
+        "--errors-csv", default=None, help="Defaults to <results stem>_errors.csv next to it."
+    )
+    parser.add_argument("--output-csv", default=None)
+    parser.add_argument("--feature-loss-threshold", type=float, default=0.05)
+
+
+def _run_grid_diagnostics_cli(args: argparse.Namespace) -> int:
+    from src.analysis.grid_diagnostics import run_grid_diagnostics
+
+    output = run_grid_diagnostics(
+        args.results_csv,
+        errors_csv=args.errors_csv,
+        output_csv=args.output_csv,
+        feature_loss_threshold=args.feature_loss_threshold,
+    )
+    print(f"Grid diagnostics CSV: {output}")
+    return 0
+
+
+def _build_paired_inference_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--query-csv", nargs="+", required=True, help="Query-level CSV(s).")
+    parser.add_argument("--selected-settings-json", default=None)
+    parser.add_argument("--output-csv", required=True)
+    parser.add_argument(
+        "--metrics", nargs="+", default=["mrr", "recall_at_1", "recall_at_10", "recall_at_50"]
+    )
+    parser.add_argument("--resamples", type=int, default=10_000)
+    parser.add_argument("--seed", type=int, default=20260326)
+    parser.add_argument(
+        "--no-entity-type-scopes",
+        action="store_true",
+        help="Only pooled scopes, no per-entity-type breakdown.",
+    )
+
+
+def _run_paired_inference_cli(args: argparse.Namespace) -> int:
+    from src.analysis.paired_inference import run_paired_inference
+
+    output = run_paired_inference(
+        args.query_csv,
+        selected_settings_path=args.selected_settings_json,
+        output_csv=args.output_csv,
+        metrics=args.metrics,
+        resamples=args.resamples,
+        seed=args.seed,
+        by_entity_type=not args.no_entity_type_scopes,
+    )
+    print(f"Paired inference CSV: {output}")
+    return 0
+
+
+def _build_selection_regret_parser(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--development-csv", required=True, help="Development results CSV.")
+    parser.add_argument(
+        "--heldout-grid",
+        nargs="+",
+        required=True,
+        help="tier=path pairs of held-out --full-grid results, e.g. kg=... bioml=...",
+    )
+    parser.add_argument("--output-csv", required=True)
+    parser.add_argument("--lambdas", nargs="+", type=float, default=[0.0, 0.25, 0.5, 1.0, 2.0])
+
+
+def _run_selection_regret_cli(args: argparse.Namespace) -> int:
+    from src.analysis.selection_regret import parse_tier_csv_arguments, run_selection_regret
+
+    output = run_selection_regret(
+        development_csv=args.development_csv,
+        heldout_grid_csvs=parse_tier_csv_arguments(args.heldout_grid),
+        output_csv=args.output_csv,
+        lambdas=args.lambdas,
+    )
+    print(f"Selection regret CSV: {output}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run KG candidate-generation experiments and comparison reports."
@@ -553,19 +725,58 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _build_full_run_parser(full_run_parser)
 
+    efficiency_parser = subparsers.add_parser(
+        "efficiency-benchmark",
+        help="Measure build time, query latency, peak RSS and index size per method.",
+    )
+    _build_efficiency_benchmark_parser(efficiency_parser)
+
+    accounting_parser = subparsers.add_parser(
+        "dataset-accounting",
+        help="Write entity counts, gold pairs, exclusions and label statistics per dataset.",
+    )
+    _build_dataset_accounting_parser(accounting_parser)
+
+    grid_diagnostics_parser = subparsers.add_parser(
+        "grid-diagnostics",
+        help="Classify grid configurations as valid, reduced-scoring, feature-losing or failed.",
+    )
+    _build_grid_diagnostics_parser(grid_diagnostics_parser)
+
+    paired_inference_parser = subparsers.add_parser(
+        "paired-inference",
+        help="Dataset-clustered bootstrap comparisons with Holm correction, micro and macro.",
+    )
+    _build_paired_inference_parser(paired_inference_parser)
+
+    selection_regret_parser = subparsers.add_parser(
+        "selection-regret",
+        help="Held-out MRR each development selection rule gives up versus the post-hoc best.",
+    )
+    _build_selection_regret_parser(selection_regret_parser)
+
     return parser
+
+
+def _development_result_files(results_dir: Path) -> set[Path]:
+    """Development results CSVs, excluding companion files written next to them."""
+    return {
+        path.resolve()
+        for path in results_dir.glob("result_*.csv")
+        if not path.stem.endswith(("_errors", "_query"))
+    }
 
 
 def _collect_existing_result_files(results_dir: Path = Path("results")) -> set[Path]:
     if not results_dir.exists():
         return set()
-    return {path.resolve() for path in results_dir.glob("result_*.csv")}
+    return _development_result_files(results_dir)
 
 
 def _resolve_new_result_file(
     existing_files: set[Path], results_dir: Path = Path("results")
 ) -> Path:
-    current_files = {path.resolve() for path in results_dir.glob("result_*.csv")}
+    current_files = _development_result_files(results_dir)
     new_files = sorted(current_files - existing_files, key=lambda p: p.stat().st_mtime)
     if not new_files:
         raise FileNotFoundError(
@@ -738,11 +949,14 @@ def _run_heldout_kg_cli(args: argparse.Namespace) -> int:
         if args.output_csv_path is None
         else set()
     )
+    if args.full_grid and args.output_csv_path is None:
+        raise ValueError("--full-grid requires --output-csv-path.")
     run_heldout_kg_experiments(
         config_path=args.config_path,
         selected_settings_path=args.selected_settings_json,
         output_csv_path=args.output_csv_path,
         show_progress=show_progress,
+        full_grid=args.full_grid,
     )
     final_output_path = (
         Path(args.output_csv_path)
@@ -776,11 +990,14 @@ def _run_heldout_class_cli(args: argparse.Namespace) -> int:
         if args.output_csv_path is None
         else set()
     )
+    if args.full_grid and args.output_csv_path is None:
+        raise ValueError("--full-grid requires --output-csv-path.")
     run_heldout_class_experiments(
         config_path=args.config_path,
         selected_settings_path=args.selected_settings_json,
         output_csv_path=args.output_csv_path,
         show_progress=show_progress,
+        full_grid=args.full_grid,
     )
     final_output_path = (
         Path(args.output_csv_path)
@@ -1328,6 +1545,16 @@ def main(argv: list[str] | None = None) -> int:
             return _run_heldout_class_full_run_cli(args)
         if args.command == "full-run":
             return _run_full_run_cli(args)
+        if args.command == "selection-regret":
+            return _run_selection_regret_cli(args)
+        if args.command == "paired-inference":
+            return _run_paired_inference_cli(args)
+        if args.command == "grid-diagnostics":
+            return _run_grid_diagnostics_cli(args)
+        if args.command == "dataset-accounting":
+            return _run_dataset_accounting_cli(args)
+        if args.command == "efficiency-benchmark":
+            return _run_efficiency_benchmark_cli(args)
         return _run_experiment_cli(args)
     except Exception as exc:
         logger.exception(

@@ -3,6 +3,14 @@
 
 experiments:
   evaluation_ks: [1, 5, 10, 20, 50]
+  # Candidate rule. "nonzero" (default): only targets with similarity score > 0 are
+  # candidates, so a method may return fewer than k. "padded": submitted-version
+  # behaviour that fills every list to min(k, |T|) with zero-score targets.
+  candidate_policy: nonzero
+  # Gold handling. "all_targets" (default): keep every '=' target per source,
+  # deterministically sorted. "legacy_first": submitted-version behaviour that keeps
+  # the first parsed target only (hash-seed dependent for files parsed by rdflib).
+  alignment_policy: all_targets
   tfidf_grid:
     - ngram_range: [1, 1]
       min_df: 1

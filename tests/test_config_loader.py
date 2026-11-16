@@ -283,6 +283,157 @@ heldout:
             ):
                 load_runtime_config(config_path)
 
+    def test_policies_default_to_corrected_behaviour(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = load_runtime_config(self._write_valid_config(Path(tmpdir)))
+
+        self.assertEqual(runtime.experiments.candidate_policy, "nonzero")
+        self.assertEqual(runtime.experiments.alignment_policy, "all_targets")
+
+    def test_legacy_policies_can_be_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    "experiments:\n",
+                    "experiments:\n  candidate_policy: padded\n  alignment_policy: legacy_first\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            runtime = load_runtime_config(config_path)
+
+        self.assertEqual(runtime.experiments.candidate_policy, "padded")
+        self.assertEqual(runtime.experiments.alignment_policy, "legacy_first")
+
+    def test_invalid_policies_raise(self) -> None:
+        for field in ("candidate_policy", "alignment_policy"):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace(
+                        "experiments:\n", f"experiments:\n  {field}: bogus\n", 1
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, f"experiments.{field}"):
+                    load_runtime_config(config_path)
+
+    def test_char_ngram_grid_is_optional_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime = load_runtime_config(self._write_valid_config(Path(tmpdir)))
+        self.assertEqual(runtime.experiments.char_ngram_grid, ())
+
+        bad_entries = (
+            "  char_ngram_grid:\n    - analyzer: word\n      ngram_range: [3, 5]\n",
+            "  char_ngram_grid:\n    - ngram_range: [5, 3]\n",
+            "  char_ngram_grid:\n    - ngram_range: [3, 5]\n      min_df: 0\n",
+        )
+        for block in bad_entries:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace(
+                        "experiments:\n", "experiments:\n" + block, 1
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "char_ngram_grid"):
+                    load_runtime_config(config_path)
+
+    def test_relative_paths_resolve_against_data_root(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config_path = self._write_valid_config(tmp)
+            text = config_path.read_text(encoding="utf-8").replace(str(tmp) + "/", "")
+            config_path.write_text("data_root: .\n" + text, encoding="utf-8")
+            runtime = load_runtime_config(config_path)
+            dataset = runtime.datasets["conference_v1"]
+            self.assertTrue(dataset.source_rdf.is_absolute())
+            self.assertTrue(dataset.source_rdf.exists())
+
+            with patch.dict(os.environ, {"KGCANDGEN_DATA_ROOT": str(tmp / "missing")}):
+                with self.assertRaises(FileNotFoundError):
+                    load_runtime_config(config_path)
+
+    def test_dense_models_are_validated_and_filtered_by_tier(self) -> None:
+        good = (
+            "  dense_models:\n"
+            "    - name: dense_minilm\n      model: m\n      revision: abc\n"
+            "    - name: dense_bio\n      model: b\n      revision: def\n      tiers: [class]\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + good, 1),
+                encoding="utf-8",
+            )
+            experiments = load_runtime_config(config_path).experiments
+        self.assertEqual([e.name for e in experiments.dense_models_for("class")], ["dense_minilm", "dense_bio"])
+        self.assertEqual([e.name for e in experiments.dense_models_for("kg")], ["dense_minilm"])
+        self.assertNotIn("device", experiments.dense_models[0].hyperparameters())
+
+        bad_blocks = (
+            "  dense_models:\n    - name: minilm\n      model: m\n      revision: abc\n",
+            "  dense_models:\n    - name: dense_x\n      model: m\n",
+            "  dense_models:\n    - name: dense_x\n      model: m\n      revision: a\n      tiers: [web]\n",
+        )
+        for block in bad_blocks:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + block, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "dense_models"):
+                    load_runtime_config(config_path)
+
+    def test_hybrid_models_reference_a_dense_model_and_follow_its_tiers(self) -> None:
+        good = (
+            "  dense_models:\n"
+            "    - name: dense_minilm\n      model: m\n      revision: abc\n"
+            "    - name: dense_bio\n      model: b\n      revision: def\n      tiers: [class]\n"
+            "  hybrid_models:\n"
+            "    - name: hybrid_char_minilm\n      dense: dense_minilm\n"
+            "    - name: hybrid_char_bio\n      dense: dense_bio\n      rrf_k: 30\n"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = self._write_valid_config(Path(tmpdir))
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + good, 1),
+                encoding="utf-8",
+            )
+            experiments = load_runtime_config(config_path).experiments
+        self.assertEqual(
+            [e.name for e in experiments.fixed_baselines_for("class")],
+            ["dense_minilm", "dense_bio", "hybrid_char_minilm", "hybrid_char_bio"],
+        )
+        self.assertEqual([e.name for e in experiments.fixed_baselines_for("kg")], ["dense_minilm", "hybrid_char_minilm"])
+        hybrid = experiments.hybrid_models[1]
+        self.assertEqual((hybrid.rrf_k, hybrid.depth, hybrid.device), (30, 50, "cpu"))
+        self.assertEqual(hybrid.hyperparameters()["model"], "b")
+        self.assertEqual(hybrid.hyperparameters()["fusion"], "rrf")
+
+        dense = "  dense_models:\n    - name: dense_bio\n      model: b\n      revision: d\n      tiers: [class]\n"
+        bad_blocks = (
+            dense + "  hybrid_models:\n    - name: char_bio\n      dense: dense_bio\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_missing\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_bio\n      tiers: [kg]\n",
+            dense + "  hybrid_models:\n    - name: hybrid_x\n      dense: dense_bio\n      depth: 0\n",
+        )
+        for block in bad_blocks:
+            with self.subTest(block=block), tempfile.TemporaryDirectory() as tmpdir:
+                config_path = self._write_valid_config(Path(tmpdir))
+                config_path.write_text(
+                    config_path.read_text(encoding="utf-8").replace("experiments:\n", "experiments:\n" + block, 1),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ValueError, "hybrid_models"):
+                    load_runtime_config(config_path)
+
     def test_bm25_k1_allows_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = self._write_valid_config(Path(tmpdir))

@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 import bm25s
+import numpy as np
 
 from src.preprocessing.text_preprocessor import preprocess_text
+from src.retrieval.topk import (
+    DEFAULT_CANDIDATE_POLICY,
+    CandidatePolicy,
+    top_k_indices,
+    validate_candidate_policy,
+)
 
 
 class Bm25Retriever:
     """Reusable BM25 retriever for top-k lexical candidate generation."""
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(
+        self,
+        k1: float = 1.5,
+        b: float = 0.75,
+        candidate_policy: CandidatePolicy = DEFAULT_CANDIDATE_POLICY,
+    ) -> None:
+        self._candidate_policy = validate_candidate_policy(candidate_policy)
         self._model = bm25s.BM25(k1=k1, b=b)
         self._entity_ids: list[str] = []
         self._is_fitted = False
@@ -50,6 +63,17 @@ class Bm25Retriever:
         if k <= 0:
             raise ValueError("k must be a positive integer.")
 
+        if self._candidate_policy == "nonzero":
+            # Score every target, then apply the shared deterministic top-k so that
+            # membership and tie order match the TF-IDF and char n-gram retrievers.
+            if query_tokens:
+                all_scores = np.asarray(self._model.get_scores(list(query_tokens)))
+            else:
+                all_scores = np.zeros(len(self._entity_ids))
+            order = top_k_indices(all_scores, k, require_positive=True)
+            return [(self._entity_ids[idx], float(all_scores[idx])) for idx in order]
+
+        # "padded": submitted-version behaviour, kept for golden-result comparison.
         candidate_count = min(k, len(self._entity_ids))
         documents, scores = self._model.retrieve(
             [query_tokens], k=candidate_count, show_progress=False, return_as="tuple"

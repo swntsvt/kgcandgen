@@ -1,0 +1,320 @@
+# Canonical configuration for the SN Computer Science revision (v1.2-sncs-r1).
+#
+# Dataset paths are relative to data_root (resolved against this file's directory) or to
+# $KGCANDGEN_DATA_ROOT when set. Fetch and verify the benchmark files with:
+#   python scripts/fetch_oaei.py --data-root data/oaei_track_cache
+# Expected SHA-256 checksums are in config/oaei_manifest.csv.
+#
+# Grids: the complete 5 x 2 x 2 TF-IDF grid (20 cells; the [2,2] and [2,3] min_df=2 cells
+# fail on two Conference pairs with an empty vocabulary, recorded in the *_errors.csv),
+# the 5 x 4 BM25 grid, and a 24-cell character n-gram sensitivity grid that is reported
+# separately and never used for selection. Dense baselines are listed under dense_models;
+# hybrid_models fuse the default char n-gram retriever with a dense model by reciprocal rank
+# (rrf_k 60, each component's top 50). Neither is tuned.
+data_root: ../data/oaei_track_cache
+experiments:
+  evaluation_ks: [1, 5, 10, 20, 50]
+  tfidf_grid:
+  - ngram_range: [1, 1]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 1]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [1, 1]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 1]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [1, 2]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 2]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [1, 2]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 2]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [2, 2]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [2, 2]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [2, 2]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [2, 2]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [1, 3]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 3]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [1, 3]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [1, 3]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [2, 3]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [2, 3]
+    min_df: 1
+    max_df: 1.0
+    sublinear_tf: true
+  - ngram_range: [2, 3]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: false
+  - ngram_range: [2, 3]
+    min_df: 2
+    max_df: 1.0
+    sublinear_tf: true
+  bm25_grid:
+  - {k1: 0.0, b: 0.0}
+  - {k1: 0.0, b: 0.3}
+  - {k1: 0.0, b: 0.75}
+  - {k1: 0.0, b: 1.0}
+  - {k1: 0.6, b: 0.0}
+  - {k1: 0.6, b: 0.3}
+  - {k1: 0.6, b: 0.75}
+  - {k1: 0.6, b: 1.0}
+  - {k1: 1.2, b: 0.0}
+  - {k1: 1.2, b: 0.3}
+  - {k1: 1.2, b: 0.75}
+  - {k1: 1.2, b: 1.0}
+  - {k1: 1.8, b: 0.0}
+  - {k1: 1.8, b: 0.3}
+  - {k1: 1.8, b: 0.75}
+  - {k1: 1.8, b: 1.0}
+  - {k1: 2.4, b: 0.0}
+  - {k1: 2.4, b: 0.3}
+  - {k1: 2.4, b: 0.75}
+  - {k1: 2.4, b: 1.0}
+  candidate_policy: nonzero
+  alignment_policy: all_targets
+  char_ngram_grid:
+  - analyzer: char_wb
+    ngram_range: [2, 4]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [2, 4]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [2, 5]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [2, 5]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 3]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 3]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 5]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 5]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 6]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [3, 6]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [4, 4]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char_wb
+    ngram_range: [4, 4]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [2, 4]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [2, 4]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [2, 5]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [2, 5]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 3]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 3]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 5]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 5]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 6]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [3, 6]
+    min_df: 2
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [4, 4]
+    min_df: 1
+    sublinear_tf: false
+  - analyzer: char
+    ngram_range: [4, 4]
+    min_df: 2
+    sublinear_tf: false
+  # Dense baselines: fixed, pinned sentence-transformer models with exact cosine search
+  # (never tuned or used for selection). MiniLM runs on every tier; BioLORD-2023 on Bio-ML.
+  dense_models:
+  - name: dense_minilm
+    model: sentence-transformers/all-MiniLM-L6-v2
+    revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+    tiers: [development, kg, class]
+    device: cpu
+    batch_size: 256
+  - name: dense_biolord
+    model: FremyCompany/BioLORD-2023
+    revision: 167aab527b238a50ca65224e6319215d2ff4fc9f
+    tiers: [class]
+    device: cpu
+    batch_size: 256
+  hybrid_models:
+  - name: hybrid_char_minilm
+    dense: dense_minilm
+    tiers: [development, kg, class]
+    rrf_k: 60
+    depth: 50
+  - name: hybrid_char_biolord
+    dense: dense_biolord
+    tiers: [class]
+    rrf_k: 60
+    depth: 50
+development_datasets:
+  flopo-pto: {track: biodiv, version: '2018', source_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/source.rdf,
+    target_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/target.rdf, alignment_rdf: oaei.webdatacommons.org/biodiv/2018/flopo-pto/reference.rdf}
+  envo-sweet: {track: biodiv, version: '2018', source_rdf: oaei.webdatacommons.org/biodiv/2018/envo-sweet/source.rdf,
+    target_rdf: oaei.webdatacommons.org/biodiv/2018/envo-sweet/target.rdf, alignment_rdf: oaei.webdatacommons.org/biodiv/2018/envo-sweet/reference.rdf}
+  mouse-human-suite: {track: anatomy_track, version: anatomy_track-default, source_rdf: oaei.webdatacommons.org/anatomy_track/anatomy_track-default/mouse-human-suite/source.rdf,
+    target_rdf: oaei.webdatacommons.org/anatomy_track/anatomy_track-default/mouse-human-suite/target.rdf,
+    alignment_rdf: oaei.webdatacommons.org/anatomy_track/anatomy_track-default/mouse-human-suite/reference.rdf}
+  cmt-conference: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-conference/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-conference/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-conference/reference.rdf}
+  cmt-confof: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-confof/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-confof/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-confof/reference.rdf}
+  cmt-edas: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-edas/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-edas/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-edas/reference.rdf}
+  cmt-ekaw: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-ekaw/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-ekaw/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-ekaw/reference.rdf}
+  cmt-iasted: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-iasted/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-iasted/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-iasted/reference.rdf}
+  cmt-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/cmt-sigkdd/reference.rdf}
+  conference-confof: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-confof/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-confof/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-confof/reference.rdf}
+  conference-edas: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-edas/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-edas/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-edas/reference.rdf}
+  conference-ekaw: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-ekaw/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-ekaw/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-ekaw/reference.rdf}
+  conference-iasted: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-iasted/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-iasted/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-iasted/reference.rdf}
+  conference-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/conference-sigkdd/reference.rdf}
+  confof-edas: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-edas/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-edas/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-edas/reference.rdf}
+  confof-ekaw: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-ekaw/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-ekaw/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-ekaw/reference.rdf}
+  confof-iasted: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-iasted/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-iasted/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-iasted/reference.rdf}
+  confof-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/confof-sigkdd/reference.rdf}
+  edas-ekaw: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-ekaw/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-ekaw/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-ekaw/reference.rdf}
+  edas-iasted: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-iasted/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-iasted/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-iasted/reference.rdf}
+  edas-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/edas-sigkdd/reference.rdf}
+  ekaw-iasted: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-iasted/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-iasted/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-iasted/reference.rdf}
+  ekaw-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/ekaw-sigkdd/reference.rdf}
+  iasted-sigkdd: {track: conference, version: conference-v1, source_rdf: oaei.webdatacommons.org/conference/conference-v1/iasted-sigkdd/source.rdf,
+    target_rdf: oaei.webdatacommons.org/conference/conference-v1/iasted-sigkdd/target.rdf, alignment_rdf: oaei.webdatacommons.org/conference/conference-v1/iasted-sigkdd/reference.rdf}
+heldout_datasets:
+  marvelcinematicuniverse-marvel: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/marvelcinematicuniverse.rdf,
+    target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/marvel.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/marvelcinematicuniverse-marvel.rdf}
+  memoryalpha-memorybeta: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/memoryalpha.rdf,
+    target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/memorybeta.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/memoryalpha-memorybeta.rdf}
+  memoryalpha-stexpanded: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/memoryalpha.rdf,
+    target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/stexpanded.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/memoryalpha-stexpanded.rdf}
+  starwars-swg: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/starwars.rdf,
+    target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/swg.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/starwars-swg.rdf}
+  starwars-swtor: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/starwars.rdf,
+    target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/swtor.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/starwars-swtor.rdf}
+heldout_secondary_datasets:
+  ncit-doid: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/source.rdf,
+    target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/target.rdf, alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/reference.rdf}
+  omim-ordo: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/omim-ordo/source.rdf,
+    target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/omim-ordo/target.rdf, alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/omim-ordo/reference.rdf}
+  snomed.body-fma.body: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.body-fma.body/source.rdf,
+    target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.body-fma.body/target.rdf,
+    alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.body-fma.body/reference.rdf}
+  snomed.neoplas-ncit.neoplas: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.neoplas-ncit.neoplas/source.rdf,
+    target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.neoplas-ncit.neoplas/target.rdf,
+    alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.neoplas-ncit.neoplas/reference.rdf}
+  snomed.pharm-ncit.pharm: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.pharm-ncit.pharm/source.rdf,
+    target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.pharm-ncit.pharm/target.rdf,
+    alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/snomed.pharm-ncit.pharm/reference.rdf}
+heldout:
+  selection: {metric: mrr, lambda: 0.5, weighting: equal_track_weight, ranking: per_track_normalized_rank}

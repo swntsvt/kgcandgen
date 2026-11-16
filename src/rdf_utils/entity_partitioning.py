@@ -56,9 +56,9 @@ class TypedEntityPartitions:
 class TypedAlignmentPartitions:
     """Gold alignment partitions grouped by entity type."""
 
-    classes: dict[str, str]
-    predicates: dict[str, str]
-    instances: dict[str, str]
+    classes: dict[str, tuple[str, ...]]
+    predicates: dict[str, tuple[str, ...]]
+    instances: dict[str, tuple[str, ...]]
     skipped_mixed_type_pairs: int
     skipped_untyped_pairs: int
 
@@ -176,40 +176,46 @@ def extract_typed_entity_partitions(
 
 
 def partition_alignment_mappings_by_entity_type(
-    mappings: Mapping[str, str],
+    mappings: Mapping[str, str | tuple[str, ...]],
     source_partitions: TypedEntityPartitions,
     target_partitions: TypedEntityPartitions,
     *,
     alignment_name: str = "alignments",
 ) -> TypedAlignmentPartitions:
-    """Partition gold mappings into type-consistent class/predicate/instance subsets."""
+    """Partition gold pairs into type-consistent class/predicate/instance subsets.
+
+    ``mappings`` values may be one target URI or a tuple of target URIs; each
+    (source, target) pair is classified on its own, and the skip counters count pairs.
+    """
     source_types = source_partitions.entity_type_by_uri()
     target_types = target_partitions.entity_type_by_uri()
-    class_pairs: dict[str, str] = {}
-    predicate_pairs: dict[str, str] = {}
-    instance_pairs: dict[str, str] = {}
+    grouped: dict[EntityType, dict[str, list[str]]] = {
+        EntityType.CLASS: {},
+        EntityType.PREDICATE: {},
+        EntityType.INSTANCE: {},
+    }
     skipped_untyped_pairs = 0
     skipped_mixed_type_pairs = 0
-
     for source_uri in sorted(mappings):
-        target_uri = str(mappings[source_uri])
+        raw_targets = mappings[source_uri]
+        targets = (raw_targets,) if isinstance(raw_targets, str) else tuple(raw_targets)
         source_type = source_types.get(source_uri)
-        target_type = target_types.get(target_uri)
+        for target_uri in targets:
+            target_type = target_types.get(str(target_uri))
+            if source_type is None or target_type is None:
+                skipped_untyped_pairs += 1
+                continue
+            if source_type is not target_type:
+                skipped_mixed_type_pairs += 1
+                continue
+            grouped[source_type].setdefault(source_uri, []).append(str(target_uri))
 
-        if source_type is None or target_type is None:
-            skipped_untyped_pairs += 1
-            continue
-        if source_type is not target_type:
-            skipped_mixed_type_pairs += 1
-            continue
+    def _freeze(values: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
+        return {source: tuple(targets) for source, targets in values.items()}
 
-        if source_type is EntityType.CLASS:
-            class_pairs[source_uri] = target_uri
-        elif source_type is EntityType.PREDICATE:
-            predicate_pairs[source_uri] = target_uri
-        elif source_type is EntityType.INSTANCE:
-            instance_pairs[source_uri] = target_uri
-
+    class_pairs = _freeze(grouped[EntityType.CLASS])
+    predicate_pairs = _freeze(grouped[EntityType.PREDICATE])
+    instance_pairs = _freeze(grouped[EntityType.INSTANCE])
     partitions = TypedAlignmentPartitions(
         classes=class_pairs,
         predicates=predicate_pairs,

@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from src.experiments.heldout_kg_runner import (
@@ -123,6 +124,12 @@ def _heldout_alignment_rdf(*, include_predicate: bool = True) -> str:
   </Alignment>
 </rdf:RDF>
 """
+
+
+
+from results_isolation import isolate_results
+
+setUpModule, tearDownModule = isolate_results("src.experiments.heldout_kg_runner")
 
 
 class HeldoutKgRunnerTests(unittest.TestCase):
@@ -261,6 +268,16 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "recall_at_2",
                         "mrr",
                         "runtime_seconds",
+                        "query_count",
+                        "multi_target_query_count",
+                        "mean_candidate_count",
+                        "any_gold_recall_at_1",
+                        "any_gold_recall_at_2",
+                        "any_gold_mrr",
+                        "rank_cutoff",
+                        "candidate_policy",
+                        "alignment_policy",
+                    "zero_candidate_query_share",
                     ],
                 )
                 rows = list(reader)
@@ -282,6 +299,9 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                         "gold_rank",
                         "retrieved_in_top_kmax",
                         "retrieval_band",
+                        "gold_score",
+                        "kth_score",
+                        "candidate_count",
                     ],
                 )
                 query_rows = list(query_reader)
@@ -344,6 +364,38 @@ class HeldoutKgRunnerTests(unittest.TestCase):
                     },
                 )
 
+    def test_full_grid_records_failed_cells_and_continues(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            output_csv = tmp / "results" / "grid.csv"
+            results = run_heldout_kg_experiments(
+                config_path=config, output_csv_path=output_csv, show_progress=False, full_grid=True
+            )
+            errors_csv = output_csv.with_name("grid_errors.csv")
+            self.assertTrue(errors_csv.exists())
+            with errors_csv.open(encoding="utf-8", newline="") as handle:
+                errors = list(csv.DictReader(handle))
+
+        self.assertTrue(errors)
+        self.assertTrue(all(row["method"] == "tfidf" for row in errors))
+        self.assertTrue(any(row["model"] == "bm25" for row in results))
+
+    def test_frozen_run_still_raises_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            config = self._write_config(tmp)
+            selected = tmp / "heldout_selected_settings.json"
+            self._write_selected_settings(selected)
+            with patch(
+                "src.experiments.heldout_kg_runner._predict_for_method",
+                side_effect=RuntimeError("boom"),
+            ):
+                with self.assertRaises(RuntimeError):
+                    run_heldout_kg_experiments(
+                        config_path=config, selected_settings_path=selected, show_progress=False
+                    )
+
     def test_candidate_reduction_ratio_handles_target_pool_smaller_than_kmax(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
@@ -367,12 +419,19 @@ class HeldoutKgRunnerTests(unittest.TestCase):
             for row in results
             if row["entity_type"] == "class" and row["model"] == "tfidf"
         )
+        # retained_candidate_size stays the nominal min(k_max, |T|); the reduction ratio
+        # is computed from the candidates actually returned.
         self.assertEqual(predicate_row["target_pool_size"], 2)
         self.assertEqual(predicate_row["retained_candidate_size"], 2)
-        self.assertAlmostEqual(predicate_row["candidate_reduction_ratio"], 0.0)
         self.assertEqual(class_row["target_pool_size"], 3)
         self.assertEqual(class_row["retained_candidate_size"], 2)
-        self.assertAlmostEqual(class_row["candidate_reduction_ratio"], 1.0 - (2.0 / 3.0))
+        for row in (predicate_row, class_row):
+            self.assertLessEqual(row["mean_candidate_count"], row["retained_candidate_size"])
+            self.assertAlmostEqual(
+                row["candidate_reduction_ratio"],
+                1.0 - (row["mean_candidate_count"] / row["target_pool_size"]),
+            )
+        self.assertGreater(predicate_row["candidate_reduction_ratio"], 0.0)
 
     def test_exact_match_heldout_rows_use_fixed_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

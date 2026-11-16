@@ -566,6 +566,7 @@ heldout:
                 selected_settings_path=str(tmp / "heldout_selected_settings.json"),
                 output_csv_path=str(output_csv),
                 show_progress=None,
+                full_grid=False,
             )
             self.assertIn(f"Held-Out KG Results CSV: {output_csv}", stdout.getvalue())
             self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
@@ -598,6 +599,7 @@ heldout:
             selected_settings_path=None,
             output_csv_path=None,
             show_progress=None,
+            full_grid=False,
         )
         self.assertIn("Held-Out KG Results CSV:", stdout.getvalue())
         self.assertIn("Held-Out KG Query CSV:", stdout.getvalue())
@@ -643,6 +645,7 @@ heldout:
                 selected_settings_path=str(tmp / "heldout_selected_settings.json"),
                 output_csv_path=str(output_csv),
                 show_progress=None,
+                full_grid=False,
             )
             self.assertIn(f"Held-Out Class-Only Results CSV: {output_csv}", stdout.getvalue())
 
@@ -984,7 +987,9 @@ heldout:
         stdout = io.StringIO()
         call_order: list[str] = []
         resolved_csv = Path("results/result_shared.csv")
-        shared_output_dir = Path("results/comparisons/result_shared")
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        shared_output_dir = Path(tmpdir.name) / "comparisons" / "result_shared"
 
         def _mark(name: str):
             def _fn(*_args, **_kwargs):
@@ -1196,6 +1201,49 @@ heldout:
         self.assertIn("heldout-class-full-run", help_text)
         self.assertIn("full-run", help_text)
         self.assertIn("run", help_text)
+
+
+
+class MainWrapperPassThroughTests(unittest.TestCase):
+    def test_heldout_wrappers_forward_full_grid(self) -> None:
+        from src import main as main_module
+
+        for wrapper, target in (
+            ("run_heldout_kg_experiments", "src.experiments.heldout_kg_runner.run_heldout_kg_experiments"),
+            ("run_heldout_class_experiments", "src.experiments.heldout_class_runner.run_heldout_class_experiments"),
+        ):
+            with self.subTest(wrapper=wrapper), patch(target) as impl:
+                getattr(main_module, wrapper)(
+                    config_path="c.yaml",
+                    selected_settings_path=None,
+                    output_csv_path="o.csv",
+                    show_progress=False,
+                    full_grid=True,
+                )
+                self.assertTrue(impl.call_args.kwargs["full_grid"])
+
+
+class ResultFileResolutionTests(unittest.TestCase):
+    def test_new_result_file_ignores_errors_and_query_companions(self) -> None:
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from src import main as main_module
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            results = Path(tmpdir)
+            existing = main_module._collect_existing_result_files(results)
+            main_csv = results / "result_20260101_000000_abc.csv"
+            main_csv.write_text("x", encoding="utf-8")
+            for name in ("result_20260101_000000_abc_errors.csv", "query_result_20260101_000000_abc.csv"):
+                companion = results / name
+                companion.write_text("x", encoding="utf-8")
+                os.utime(companion, (main_csv.stat().st_mtime + 10,) * 2)
+
+            resolved = main_module._resolve_new_result_file(existing, results)
+
+        self.assertEqual(resolved.name, main_csv.name)
 
 
 if __name__ == "__main__":
