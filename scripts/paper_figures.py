@@ -29,8 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CATEGORY_STYLE = {
     "valid": ("#2a7fb8", "o", "Valid"),
-    "reduced_scoring": ("#e39b2d", "s", "Reduced scoring"),
-    "feature_loss": ("#c8453b", "D", "Feature loss"),
+    "reduced_scoring": ("#e39b2d", "s", "Reduced-scoring"),
+    "feature_loss": ("#c8453b", "D", "Feature-loss"),
     "failed": ("#555555", "X", "Failed on $\\geq$1 pair"),
 }
 GRID_METHODS = [
@@ -43,10 +43,10 @@ LATENCY_METHODS = [
     ("bm25", "BM25", "#e39b2d", "s"),
     ("tfidf", "TF-IDF", "#9467bd", "^"),
     ("char_ngram", "Char $n$-gram", "#2a7fb8", "o"),
-    ("dense_minilm", "Dense MiniLM", "#2ca02c", "D"),
-    ("hybrid_char_minilm", "Hybrid char+MiniLM", "#c8453b", "P"),
-    ("dense_biolord", "Dense BioLORD", "#17becf", "d"),
-    ("hybrid_char_biolord", "Hybrid char+BioLORD", "#8c564b", "X"),
+    ("dense_minilm", "MiniLM", "#2ca02c", "D"),
+    ("hybrid_char_minilm", "Hybrid (MiniLM)", "#c8453b", "P"),
+    ("dense_biolord", "BioLORD", "#17becf", "d"),
+    ("hybrid_char_biolord", "Hybrid (BioLORD)", "#8c564b", "X"),
 ]
 
 
