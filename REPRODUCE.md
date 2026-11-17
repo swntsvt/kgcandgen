@@ -37,6 +37,11 @@ never take part in configuration selection.
 
 The 34 alignment pairs (24 development, 5 OAEI Knowledge Graph, 5 OAEI Bio-ML) use 100
 distinct RDF files, listed with sizes and SHA-256 checksums in `config/oaei_manifest.csv`.
+The Bio-ML pairs come from the 2022 equivalence-matching release in its supervised setting:
+each pair's `reference.rdf` is the 70% test split of the reference mappings, and `input.rdf`
+(the 30% training split) is not used by any method. Candidate pools are the complete
+ontologies, and only the test mappings are evaluated.
+
 Place them under `data/oaei_track_cache/` (or point `KGCANDGEN_DATA_ROOT` at an existing
 copy), then verify:
 
@@ -118,7 +123,7 @@ and are Holm-adjusted per scope and metric.
 The efficiency benchmark measures each method in a fresh single-threaded process; run it
 with no other heavy workload on the machine.
 
-## 8. Scaling curve and selection bootstrap
+## 8. Scaling curve, selection bootstrap and all-source zero-candidate share
 
 ```bash
 ./venv/bin/python scripts/scaling_benchmark.py --config-path config/runtime.paper.yaml \
@@ -127,6 +132,16 @@ with no other heavy workload on the machine.
 ./venv/bin/python scripts/selection_bootstrap.py --label v1.2-sncs-r1 --resamples 1000 \
     --output-csv results/selection_bootstrap/selection_bootstrap_v1.2-sncs-r1.csv
 ```
+
+```bash
+./venv/bin/python scripts/all_source_zero_share.py --label v1.2-sncs-r1
+```
+
+`all_source_zero_share.py` queries every TF-IDF, BM25 and character n-gram grid cell with
+every source class of each development pair, gold or not, and records the share that gets no
+candidate. It writes `results/all_source_zero_share/all_source_zero_share_v1.2-sncs-r1{.csv,
+_summary.csv,.json}` and exits non-zero unless its gold-source shares equal the canonical
+run's.
 
 The scaling run (about 80 minutes single-threaded) runs the 1,653 Marvel instance queries
 against nested Marvel subsamples (10k-350k targets), the full pool (532,781) and the pooled
@@ -142,7 +157,8 @@ writes a `.json` file of its settings next to its CSV.
 ./venv/bin/python scripts/paper_supplement.py --label v1.2-sncs-r1 --old-vs-new ovn.csv \
     --output <paper>/supplementary_tables.tex \
     --scaling-csv results/scaling/scaling_v1.2-sncs-r1.csv \
-    --selection-bootstrap-csv results/selection_bootstrap/selection_bootstrap_v1.2-sncs-r1.csv
+    --selection-bootstrap-csv results/selection_bootstrap/selection_bootstrap_v1.2-sncs-r1.csv \
+    --all-source-zero-share-csv results/all_source_zero_share/all_source_zero_share_v1.2-sncs-r1_summary.csv
 ```
 
 `old_vs_new.py` needs the submitted version's result files (tag `v1.0-submitted`) for the

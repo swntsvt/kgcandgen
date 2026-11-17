@@ -302,6 +302,10 @@ heldout_datasets:
     target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/swg.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/starwars-swg.rdf}
   starwars-swtor: {track: knowledgegraph, version: v4, source_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/starwars.rdf,
     target_rdf: oaei.webdatacommons.org/knowledgegraph/v4/ontologies/swtor.rdf, alignment_rdf: oaei.webdatacommons.org/knowledgegraph/v4/references/starwars-swtor.rdf}
+# Bio-ML tier: OAEI Bio-ML 2022 equivalence matching, supervised setting. In each pair
+# reference.rdf holds the 70% test split of the reference mappings and input.rdf (not used
+# here) the 30% training split. No method uses the training mappings; the candidate pools
+# are the complete source and target ontologies, and only the test mappings are evaluated.
 heldout_secondary_datasets:
   ncit-doid: {track: bio-ml-equiv-supervised, version: '2022', source_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/source.rdf,
     target_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/target.rdf, alignment_rdf: oaei.webdatacommons.org/bio-ml-equiv-supervised/2022/ncit-doid/reference.rdf}

@@ -8,7 +8,8 @@ Every number comes from a file listed in ``results/canonical/<label>/manifest.js
 except the "submitted" column of Table S1, which ``old_vs_new.py`` computes from the
 v1.0-submitted result files. Tables are numbered S1-S16 in the order written,
 plus S17 from ``scripts/scaling_benchmark.py`` (``--scaling-csv``), S18 from
-``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``) S19, the any-gold variant, and
+``scripts/selection_bootstrap.py`` (``--selection-bootstrap-csv``), an extra column in S3-S5 from
+``scripts/all_source_zero_share.py`` (``--all-source-zero-share-csv``), S19, the any-gold variant, and
 S20-S21, macro and micro averages of every metric, and S22, each method's mean with a
 dataset-clustered interval.
 """
@@ -23,10 +24,17 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Method names follow the paper's glossary: SHORT for row labels, HEAD for column headers.
 SHORT = {
-    "exact_match": "Exact", "tfidf": "TF-IDF", "bm25": "BM25", "char_ngram": "Char",
+    "exact_match": "Exact match", "tfidf": "TF-IDF", "bm25": "BM25", "char_ngram": "Char $n$-gram",
     "dense_minilm": "MiniLM", "dense_biolord": "BioLORD",
-    "hybrid_char_minilm": "H-MiniLM", "hybrid_char_biolord": "H-BioLORD",
+    "hybrid_char_minilm": "Hybrid (MiniLM)", "hybrid_char_biolord": "Hybrid (BioLORD)",
+}
+HEAD = {
+    **SHORT,
+    "exact_match": "\\shortstack{Exact\\\\match}", "char_ngram": "\\shortstack{Char\\\\$n$-gram}",
+    "hybrid_char_minilm": "\\shortstack{Hybrid\\\\(MiniLM)}",
+    "hybrid_char_biolord": "\\shortstack{Hybrid\\\\(BioLORD)}",
 }
 FIXED_ORDER = list(SHORT)
 KG_ABBREV = {
@@ -34,11 +42,18 @@ KG_ABBREV = {
     "memoryalpha-stexpanded": "MA--STX", "starwars-swg": "SW--SWG", "starwars-swtor": "SW--SWTOR",
 }
 BIO_ABBREV = {
-    "ncit-doid": "NCIT--DOID", "omim-ordo": "OMIM--ORDO", "snomed.body-fma.body": "SNOMED--FMA (body)",
-    "snomed.neoplas-ncit.neoplas": "SNOMED--NCIT (neo.)", "snomed.pharm-ncit.pharm": "SNOMED--NCIT (pharm.)",
+    "ncit-doid": "NCIT--DOID", "omim-ordo": "OMIM--ORDO", "snomed.body-fma.body": "SNOMED--FMA (Body)",
+    "snomed.neoplas-ncit.neoplas": "SNOMED--NCIT (Neoplas)", "snomed.pharm-ncit.pharm": "SNOMED--NCIT (Pharm)",
 }
+DEV_ABBREV = {"flopo-pto": "FLOPO--PTO", "envo-sweet": "ENVO--SWEET", "mouse-human-suite": "MA--NCI"}
+
+
+def pair_name(dataset: str) -> str:
+    """Glossary name of a pair; Conference pairs keep their ontology names."""
+    return (KG_ABBREV.get(dataset) or BIO_ABBREV.get(dataset) or DEV_ABBREV.get(dataset)
+            or tt(dataset.replace("-", "--")))
 TRACK_NAME = {"biodiv": "Biodiversity", "anatomy_track": "Anatomy", "conference": "Conference"}
-CATEGORY = {"valid": "valid", "reduced_scoring": "reduced scoring", "feature_loss": "feature loss", "failed": "failed"}
+CATEGORY = {"valid": "valid", "reduced_scoring": "reduced-scoring", "feature_loss": "feature-loss", "failed": "failed"}
 
 
 def tt(text: str) -> str:
@@ -109,8 +124,8 @@ def s1_old_vs_new(ovn: pd.DataFrame) -> str:
         ("KG instances Recall@50", "Table 4", "instance", "recall_at_50"),
         ("KG macro MRR", "§6 text (aggregation)", "KG macro MRR", "MRR"),
         ("KG micro MRR", "§6 text (aggregation)", "KG micro MRR", "MRR"),
-        ("BioML MRR (macro)", "Table 5", "macro", "mrr"),
-        ("BioML Recall@50 (macro)", "Table 5", "macro", "recall_at_50"),
+        ("Bio-ML MRR (macro)", "Table 5", "macro", "mrr"),
+        ("Bio-ML Recall@50 (macro)", "Table 5", "macro", "recall_at_50"),
         ("Marvel instances Recall@50", "§6.2", "Marvel instance pool", "recall_at_50"),
         ("Dev.\\ Recall gain 20$\\to$50", "§5.1 text (depth gains)", "Recall 20->50 mean gain", "recall"),
     ]
@@ -127,7 +142,8 @@ def s1_old_vs_new(ovn: pd.DataFrame) -> str:
                 cells.append(f"{float(hit.old.iloc[0]):.3f} $\\to$ {float(hit.new.iloc[0]):.3f}")
         rows.append(cells)
     return table(
-        "Submitted values (v1.0-submitted) against this revision (v1.2-sncs-r1) for the lexical methods. "
+        "Values from the earlier code release (tag v1.0-submitted) against this study (v1.2-sncs-r1) for the "
+        "lexical methods. "
         "The changes come from three corrections: candidate lists are no longer padded with zero-score targets, "
         "all gold targets of a source are kept, and ties are broken deterministically. "
         "BM25 and TF-IDF use the selected configuration, which is the same in both versions.",
@@ -146,29 +162,47 @@ def s2_dev_pairs(dev: pd.DataFrame, selected: dict[str, str]) -> str:
             if last is not None and t != last:
                 midrules.add(len(rows))
             last = t
-            rows.append([TRACK_NAME[t], tt(dataset), f"{int(gold[(t, dataset)]):,}"] + [f3(values[m]) for m in methods])
+            rows.append([TRACK_NAME[t], pair_name(dataset), f"{int(gold[(t, dataset)]):,}"] + [f3(values[m]) for m in methods])
     return table(
         "Development MRR per pair. BM25 and TF-IDF use the selected configuration. "
         "Gold is the number of gold pairs.",
         "tab:s-dev-pairs", "@{}llrcccccc@{}",
-        ["Track", "Pair", "Gold"] + [SHORT[m] for m in methods], rows, size=r"\footnotesize", midrules=midrules)
+        ["Track", "Pair", "Gold"] + [HEAD[m] for m in methods], rows, size=r"\footnotesize", midrules=midrules)
 
 
-def s3_grids(diagnostics: pd.DataFrame) -> str:
+def s3_grids(diagnostics: pd.DataFrame, all_sources: pd.DataFrame | None = None) -> str:
+    """Tables S3-S5. ``all_sources`` (summary CSV of scripts/all_source_zero_share.py) adds the
+    zero-candidate share over every source class, which needs no gold mappings."""
     out = []
     specs = [("bm25", "BM25", "tab:s-grid-bm25"), ("tfidf", "TF-IDF", "tab:s-grid-tfidf"),
              ("char_ngram_sensitivity", "character $n$-gram", "tab:s-grid-char")]
+    share_all = {}
+    if all_sources is not None:
+        keys = all_sources.hyperparameters.map(lambda h: json.dumps(json.loads(h), sort_keys=True,
+                                                                     separators=(",", ":")))
+        share_all = dict(zip(zip(all_sources.method, keys), all_sources.mean_share_all))
     for method, name, label in specs:
         frame = diagnostics[diagnostics.method == method].sort_values("mean_mrr", ascending=False)
-        rows = [[describe(method, r.hyperparameters), f3(r.mean_mrr), f3(r.mean_recall_at_50),
-                 f"{r.mean_zero_candidate_query_share:.3f}", str(int(r.datasets_completed)), CATEGORY[r.category]]
-                for r in frame.itertuples()]
-        out.append(table(
-            f"Every {name} grid cell on the development tier, sorted by mean MRR over pairs. "
-            "``No cand.'' is the mean share of queries with no candidate; ``Pairs'' is the number of the 24 "
-            "pairs on which the cell could be run.",
-            label, "@{}lccccl@{}", ["Configuration", "MRR", "R@50", "No cand.", "Pairs", "Category"], rows,
-            size=r"\footnotesize"))
+        rows = []
+        for r in frame.itertuples():
+            row = [describe(method, r.hyperparameters), f3(r.mean_mrr), f3(r.mean_recall_at_50),
+                   f"{r.mean_zero_candidate_query_share:.3f}"]
+            if all_sources is not None:
+                key = (method, json.dumps(json.loads(r.hyperparameters), sort_keys=True, separators=(",", ":")))
+                row.append(f"{share_all[key]:.3f}" if key in share_all else "--")
+            rows.append(row + [str(int(r.datasets_completed)), CATEGORY[r.category]])
+        header = ["Configuration", "MRR", "R@50", "No cand."]
+        columns = "@{}lccccl@{}"
+        caption = (f"Every {name} grid cell on the development tier, sorted by mean MRR over pairs. "
+                   "``No cand.'' is the mean share of gold queries with no candidate; ")
+        if all_sources is not None:
+            header.append("All src.")
+            columns = "@{}lcccccl@{}"
+            caption += ("``All src.'' is the same share over every source class of the pair, "
+                        "which needs no gold mappings; ")
+        caption += "``Pairs'' is the number of the 24 pairs on which the cell could be run."
+        out.append(table(caption, label, columns, header + ["Pairs", "Category"], rows,
+                         size=r"\footnotesize"))
     return "\n".join(out)
 
 
@@ -197,7 +231,7 @@ def s4_selection(regret: pd.DataFrame) -> str:
         "Configuration picked by each development-based selection rule, and its held-out selection regret: "
         "the post-hoc best held-out macro MRR minus that of the picked configuration, with the picked "
         "configuration's held-out rank among the configurations that ran on every pair of the tier.",
-        "tab:s-selection", "@{}lllcc@{}", ["Method", "Rule", "Picked", "KG regret (rank)", "BioML regret (rank)"],
+        "tab:s-selection", "@{}lllcc@{}", ["Method", "Rule", "Picked", "KG regret (rank)", "Bio-ML regret (rank)"],
         rows, size=r"\footnotesize", midrules=midrules)
 
 
@@ -217,7 +251,7 @@ def s5_kg_units(kg: pd.DataFrame, selected: dict[str, str]) -> str:
                 rows.append([KG_ABBREV[dataset] if entity == "class" else "", entity.capitalize(),
                              f"{int(gold[(dataset, entity)]):,}"] + [f3(values[m]) for m in methods])
         out.append(table(f"KG Track {name} per held-out pair and entity type.", label, "@{}llrcccccc@{}",
-                         ["Pair", "Type", "Gold"] + [SHORT[m] for m in methods], rows,
+                         ["Pair", "Type", "Gold"] + [HEAD[m] for m in methods], rows,
                          size=r"\footnotesize", midrules=midrules))
     return "\n".join(out)
 
@@ -231,8 +265,8 @@ def s6_bioml(bio: pd.DataFrame, selected: dict[str, str]) -> str:
         sub = frame[frame.dataset == dataset].set_index("method")
         for metric, name in [("mrr", "MRR"), ("recall_at_50", "R@50")]:
             rows.append([BIO_ABBREV[dataset] if metric == "mrr" else "", name] + [f3(sub.loc[m, metric]) for m in FIXED_ORDER])
-    return table("BioML Track MRR and Recall@50 per pair. H-: hybrid of character $n$-grams with the named encoder.",
-                 "tab:s-bioml", "@{}llcccccccc@{}", ["Pair", ""] + [SHORT[m] for m in FIXED_ORDER], rows,
+    return table("Bio-ML Track MRR and Recall@50 per pair.",
+                 "tab:s-bioml", "@{}llcccccccc@{}", ["Pair", ""] + [HEAD[m] for m in FIXED_ORDER], rows,
                  size=r"\scriptsize", midrules=midrules)
 
 
@@ -252,16 +286,16 @@ def s7_reduction(kg: pd.DataFrame, bio: pd.DataFrame, selected: dict[str, str]) 
                     + [f3(sub.loc[m, "candidate_reduction_ratio"]) for m in columns])
     return table(
         "Candidate reduction ratio $1-\\bar{c}/|\\mathcal{T}|$, from the mean number $\\bar{c}$ of candidates "
-        "returned per query~($k_{\\max}=50$). ``Dense'' covers MiniLM and the hybrids, whose list lengths are "
-        "identical on every unit (BioLORD and its hybrid also match MiniLM on BioML).",
-        "tab:s-reduction", "@{}llrccccc@{}", ["Pair", "Type", "$|\\mathcal{T}|$", "Exact", "TF-IDF", "BM25", "Char", "Dense"],
+        "returned per query~($k_{\\max}=50$). ``MiniLM \\& hybrids'' covers MiniLM and the "
+        "hybrids, whose list lengths are identical on every unit (BioLORD and its hybrid also match MiniLM on Bio-ML).",
+        "tab:s-reduction", "@{}llrccccc@{}", ["Pair", "Type", "$|\\mathcal{T}|$", HEAD["exact_match"], "TF-IDF", "BM25", HEAD["char_ngram"], "\\shortstack{MiniLM \\\\ \\& hybrids}"],
         rows, size=r"\footnotesize", midrules=midrules)
 
 
 def s8_efficiency(efficiency: pd.DataFrame) -> str:
     frame = efficiency[efficiency.target_pool_size >= 1000].copy()
     frame["pool"] = frame.apply(
-        lambda r: (KG_ABBREV.get(r.dataset) or BIO_ABBREV.get(r.dataset) or tt(r.dataset))
+        lambda r: pair_name(r.dataset)
         + ("" if r.tier != "kg" else f" ({r.entity_type})"), axis=1)
     order = frame.drop_duplicates("pool").sort_values("target_pool_size")[["pool", "target_pool_size"]]
     out = []
@@ -274,15 +308,13 @@ def s8_efficiency(efficiency: pd.DataFrame) -> str:
         rows = [[pool, f"{int(size):,}"] + [("--" if pd.isna(pivot.loc[pool].get(m)) else fmt(pivot.loc[pool, m]))
                                             for m in FIXED_ORDER] for pool, size in order.itertuples(index=False)]
         out.append(table(f"{name}, single-threaded on CPU, for every pool of at least 1,000 targets.", label,
-                         "@{}lrcccccccc@{}", ["Pool", "$|\\mathcal{T}|$"] + [SHORT[m] for m in FIXED_ORDER], rows,
+                         "@{}lrcccccccc@{}", ["Pool", "$|\\mathcal{T}|$"] + [HEAD[m] for m in FIXED_ORDER], rows,
                          size=r"\scriptsize"))
     return "\n".join(out)
 
 
 def _unit_name(row) -> str:
-    if row.dataset in KG_ABBREV:
-        return KG_ABBREV[row.dataset]
-    return BIO_ABBREV.get(row.dataset, tt(row.dataset))
+    return pair_name(row.dataset)
 
 
 def _accounting_rows(accounting: pd.DataFrame, cells) -> tuple[list[list[str]], set[int]]:
@@ -308,7 +340,7 @@ def s9_accounting(accounting: pd.DataFrame) -> str:
         n(r.source_entities), n(r.target_entities), n(r.eval_queries), n(r.gold_pairs),
         n(r.multi_target_queries), r.m21_shown, n(r.excluded_pairs)])
     return table(
-        "Dataset accounting per evaluation unit. $|\\mathcal{S}|$ and $|\\mathcal{T}|$ are the source and target "
+        "Accounting per evaluation unit. $|\\mathcal{S}|$ and $|\\mathcal{T}|$ are the source and target "
         "entities of the evaluated type; ``Queries'' are the source entities with at least one gold target; "
         "``Gold'' the gold pairs evaluated; ``Multi'' the queries with more than one gold target; ``M:1'' the "
         "targets of the pair's reference alignment that are matched by more than one source (given once per "
@@ -448,11 +480,11 @@ def s13_scaling(scaling: pd.DataFrame) -> str:
         "pairs. Single-threaded on CPU with the protocol of Tables~\\ref{tab:s-build}--\\ref{tab:s-latency}; "
         "Recall and MRR are pair-level.",
         "tab:s-scaling", "@{}l" + "r" * len(methods) + "@{}",
-        [""] + [SHORT[m] for m in methods], rows, size=r"\small", midrules=midrules)
+        [""] + [HEAD[m] for m in methods], rows, size=r"\small", midrules=midrules)
 
 
 def s14_selection_bootstrap(boot: pd.DataFrame, resamples: int) -> str:
-    """How often each configuration is selected when development datasets are resampled (R2-2)."""
+    """How often each configuration is selected when development pairs are resampled (R2-2)."""
     rows: list[list[str]] = []
     midrules: set[int] = set()
     for method in ("bm25", "tfidf"):
@@ -466,7 +498,7 @@ def s14_selection_bootstrap(boot: pd.DataFrame, resamples: int) -> str:
                          CATEGORY[r.category], f3(r.development_mean_mrr),
                          f3(r.kg_regret_macro), f3(r.bioml_regret_macro)])
     return table(
-        f"Uncertainty of the selected configuration. Development datasets are resampled with replacement within "
+        f"Uncertainty of the selected configuration. Development pairs are resampled with replacement within "
         f"each track ({resamples:,} resamples) and the stability-aware rule ($\\lambda=0.5$) is applied to each "
         "resample. The table lists every configuration picked at least once, how often it was picked, its "
         "diagnostic category, its full-sample development MRR, and its held-out macro-MRR regret against the "
@@ -474,7 +506,7 @@ def s14_selection_bootstrap(boot: pd.DataFrame, resamples: int) -> str:
         "tier. Anatomy has one development pair and Biodiversity two, so most of the resampling variation "
         "comes from the 21 Conference pairs.",
         "tab:s-selection-boot", "@{}llrlrrr@{}",
-        ["", "Configuration", "Picked\\,\\%", "Category", "Dev.\\ MRR", "KG regret", "BioML regret"],
+        ["", "Configuration", "Picked\\,\\%", "Category", "Dev.\\ MRR", "KG regret", "Bio-ML regret"],
         rows, size=r"\small", midrules=midrules)
 
 
@@ -482,7 +514,7 @@ def s15_any_gold(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selecte
     """Pair-level metrics against the any-gold-target variant (R1-4)."""
     rows: list[list[str]] = []
     midrules: set[int] = set()
-    for name, frame in [("Development", dev), ("KG Track", kg), ("BioML Track", bio)]:
+    for name, frame in [("Development", dev), ("KG Track", kg), ("Bio-ML Track", bio)]:
         frame = selected_filter(frame, selected)
         means = frame.groupby("method")[["recall_at_50", "any_gold_recall_at_50", "mrr", "any_gold_mrr"]].mean()
         if rows:
@@ -523,8 +555,8 @@ def s16_micro_macro(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, sele
     for label, caption, groups in [
         ("tab:s-micro-macro-dev-bio",
          "Macro~(mean over evaluation units) and micro~(mean over gold pairs) averages of every metric on the "
-         "development and BioML tiers. Lexical methods use their selected configuration.",
-         [("Development (24 pairs, 2,668 gold pairs)", dev), ("BioML Track (5 pairs, 17,689 gold pairs)", bio)]),
+         "development and Bio-ML tiers. Lexical methods use their selected configuration.",
+         [("Development (24 pairs, 2,668 gold pairs)", dev), ("Bio-ML Track (5 pairs, 17,689 gold pairs)", bio)]),
         ("tab:s-micro-macro-kg",
          "Macro and micro averages of every metric on the KG Track, over all 15 evaluation units and per entity "
          "type. Instances supply 15,127 of the 15,357 gold pairs, so the overall micro average follows them.",
@@ -566,7 +598,7 @@ def s17_mean_ci(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selected
     for name, frame in [("Development (24 pairs)", dev), ("KG Track, all units (5 datasets)", kg),
                         ("KG classes", kg[kg.entity_type == "class"]),
                         ("KG predicates", kg[kg.entity_type == "predicate"]),
-                        ("KG instances", kg[kg.entity_type == "instance"]), ("BioML Track (5 pairs)", bio)]:
+                        ("KG instances", kg[kg.entity_type == "instance"]), ("Bio-ML Track (5 pairs)", bio)]:
         frame = selected_filter(frame, selected)
         if rows:
             midrules.add(len(rows))
@@ -580,8 +612,8 @@ def s17_mean_ci(dev: pd.DataFrame, kg: pd.DataFrame, bio: pd.DataFrame, selected
             rows.append([f"\\quad {SHORT[m]}"] + cells)
     return table(
         "Mean MRR and Recall@50 of every method with dataset-clustered 95\\% bootstrap intervals~(10,000 "
-        "resamples of whole datasets). Means are macro averages over evaluation units, as in Tables~2--5 of the "
-        "paper; lexical methods use their selected configuration. With five datasets per held-out tier the "
+        "resamples of whole pairs). Means are macro averages over evaluation units, as in Tables~2--5 of the "
+        "paper; lexical methods use their selected configuration. With five pairs per held-out tier the "
         "intervals are approximate and probably too narrow; paired differences between methods, which are "
         "more precise because both methods answer the same queries, are in Table~6 of the paper.",
         "tab:s-mean-ci", "@{}lcc@{}", ["", "MRR [95\\% CI]", "Recall@50 [95\\% CI]"], rows,
@@ -597,6 +629,8 @@ def main() -> None:
                         help="Output of scripts/scaling_benchmark.py; adds Table S17.")
     parser.add_argument("--selection-bootstrap-csv", type=Path, default=None,
                         help="Output of scripts/selection_bootstrap.py; adds Table S18.")
+    parser.add_argument("--all-source-zero-share-csv", type=Path, default=None,
+                        help="Summary CSV of scripts/all_source_zero_share.py; adds a column to Tables S3-S5.")
     args = parser.parse_args()
     run = Run(args.label)
     selected_path = run.path(lambda p: p.endswith("heldout_selected_settings.json"))
@@ -608,7 +642,8 @@ def main() -> None:
         f"% Generated by scripts/paper_supplement.py from run {args.label}; do not edit by hand.",
         s1_old_vs_new(pd.read_csv(args.old_vs_new)),
         s2_dev_pairs(dev, selected),
-        s3_grids(run.csv(lambda p: p.endswith("/grid_diagnostics.csv"))),
+        s3_grids(run.csv(lambda p: p.endswith("/grid_diagnostics.csv")),
+                 pd.read_csv(args.all_source_zero_share_csv) if args.all_source_zero_share_csv else None),
         s4_selection(run.csv(lambda p: p.endswith("/selection_regret.csv"))),
         s5_kg_units(kg, selected),
         s6_bioml(bio, selected),
